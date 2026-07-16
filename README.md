@@ -74,8 +74,15 @@ docker compose run --rm providermap test
 docker compose run --rm providermap investigate
 ```
 
-Python 3.10+. No database server, no browser automation (Playwright/Selenium)
-required at any point — see [Architecture](#architecture) for why.
+Python 3.10+. No database server required. Browser automation (Playwright)
+is optional — only needed for `site.fetch_mode: "playwright"`, a site whose
+bot-management blocks plain HTTP clients; see [Architecture](#architecture)
+and `PROJECT_STATE.md`. Install it with:
+
+```bash
+pip install -e ".[render]"
+playwright install chromium
+```
 
 ---
 
@@ -100,10 +107,12 @@ Then, against a real site:
 ```bash
 providermap investigate                        # 1. analyse the site
 #   -> read logs/investigation_report.md
-providermap scrape --dry-run --limit 50         # 2. rehearsal, writes nothing
-providermap scrape --limit 50                   # 3. small real trial
-providermap export                              # 4. eyeball the output
-providermap scrape                               # 5. the full run (resumable)
+providermap trial                               # 2. live, 10 records, auto-exports
+#   -> read exports/output/trial/providers.xlsx
+providermap scrape --dry-run --limit 50         # 3. rehearsal, writes nothing
+providermap scrape --limit 50                   # 4. small real trial
+providermap export                              # 5. eyeball the output
+providermap scrape                               # 6. the full run (resumable)
 providermap export
 ```
 
@@ -136,6 +145,13 @@ nppes:
   enabled: true                          # false -> heuristics only, still runs
   trip_after_consecutive_failures: 20    # circuit breaker
 
+# Only consulted when site.fetch_mode is "playwright" - see the `[render]`
+# install step above and PROJECT_STATE.md for when this does (and, for
+# AdventHealth specifically, currently does not) unlock a blocked site.
+rendering:
+  headless: true
+  wait_after_load_seconds: 1.5
+
 npi:
   checksum: "warn"       # strict | warn | off
   require_npi: true
@@ -157,6 +173,7 @@ instead of editing the file directly.
 ```bash
 providermap test                    # offline pipeline run + fixture dataset check
 providermap investigate             # site analysis + data-quality sample
+providermap trial --n 10            # live: discover + enrich N + auto-export, one command
 providermap discover                # find every provider URL (no enrichment)
 providermap scrape                  # process the queue (resumable — Ctrl-C is safe)
 providermap scrape --limit 100      # process at most 100 URLs this run
@@ -312,7 +329,7 @@ docstring. Highlights:
 
 | File | Contents |
 |---|---|
-| `providers.xlsx` | One row per active provider (17 columns), rows below `high` confidence highlighted; a `Departed` tab for providers no longer in the directory |
+| `providers.xlsx` | One row per active provider (23 columns), rows below `high` confidence highlighted; a `Departed` tab for providers no longer in the directory |
 | `excluded_records.xlsx` | Every non-provider record and why, plus a breakdown by classification |
 | `summary.xlsx` | Run stats, provider-type breakdown, site-confidence breakdown, duplicate-review queue, recent field-level changes, full run history, and errors |
 
@@ -375,19 +392,33 @@ name mismatch).
 
 ## Known limitations
 
-1. **The AdventHealth adapter's specialty extraction** is inferred from
-   `<title>`/`og:title` text, not confirmed against a live DOM inspection
-   (developed from extracted page text). It fails soft — falls back to the
-   NPPES taxonomy description — but check this column after a trial run.
-2. **Secondary practice locations are counted, not individually captured.**
+1. **AdventHealth's rendered profile page (`/doctors/{slug}-{npi}`) is
+   currently blocked by Akamai bot-management** for both plain HTTP and a
+   vanilla, non-evasive Playwright browser (verified directly, not assumed —
+   see `PROJECT_STATE.md`). `/sitemap.xml`, `/robots.txt`, and the
+   `/physician/vcard/{npi}` endpoint are not blocked, so discovery and
+   vCard-sourced name/practice/phone/address enrichment work today over
+   plain HTTP. Anything sourced only from the rendered page — JSON-LD, the
+   `<title>`/`og:title` HTML-scraping fallback, and the appointment-link
+   location count that drives `location_count`/`site_confidence` — is
+   unavailable for live data until that access situation changes; affected
+   records are still stored, just with those fields at their defaults. See
+   the README's "Legal & ethical use" section for the recommended next step
+   if this matters enough to pursue further.
+2. **The AdventHealth adapter's specialty extraction** (the HTML-scraping
+   fallback, tried only when JSON-LD is absent) is inferred from
+   `<title>`/`og:title` text, not confirmed against a live DOM inspection.
+   It fails soft — falls back to the NPPES taxonomy description — but check
+   this column after a trial run.
+3. **Secondary practice locations are counted, not individually captured.**
    The adapter reliably counts how many locations a provider has (used for
    `site_confidence`) but only stores the primary address. The
    `provider_locations` table is wired for full multi-address capture — a
    natural next increment for a contributor.
-3. **NPPES coverage isn't 100%** — deactivated or very recently issued NPIs
+4. **NPPES coverage isn't 100%** — deactivated or very recently issued NPIs
    won't resolve; those fall back to heuristics and are marked
    `nppes_enumeration = 'not_found'`.
-4. Only one adapter (AdventHealth) currently ships. The framework is designed
+5. Only one adapter (AdventHealth) currently ships. The framework is designed
    for more; see `CONTRIBUTING.md`.
 
 ---
@@ -401,13 +432,15 @@ providermap/
 │   ├── config.py              typed configuration loader
 │   ├── models.py               dataclasses: Provider, Location, ...
 │   ├── net.py                   HTTP client, rate limiting, cache, robots.txt
+│   ├── render.py                 optional Playwright-rendered fetch backend
 │   ├── nppes.py                  CMS NPI registry client + circuit breaker
 │   ├── sources.py                 sitemap/jsonapi/views_ajax/html discovery
 │   ├── validator.py                classification + validation rules
 │   ├── database.py                  SQLite schema, migrations, dedupe
 │   ├── exporter.py                   Excel export
 │   ├── discover.py                    site analysis / investigation
-│   └── parser_utils.py                 generic parsing (NPI checksum, vCard, ...)
+│   └── parser_utils.py                 generic parsing (NPI checksum, vCard,
+│                                         JSON-LD, ...)
 ├── adapters/
 │   ├── base.py               SiteAdapter interface
 │   └── adventhealth/         reference adapter
@@ -416,6 +449,7 @@ providermap/
 ├── tests/                   pytest suite (100 tests, fully offline)
 ├── database/  logs/  exports/output/    (gitignored - generated at runtime)
 ├── config.example.yaml
+├── PROJECT_STATE.md         what's actually verified working against the live site, and why
 ├── pyproject.toml           Black / Ruff / mypy / pytest configuration
 ├── Dockerfile  docker-compose.yml
 ├── .github/workflows/ci.yml

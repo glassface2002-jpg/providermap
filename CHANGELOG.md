@@ -7,13 +7,54 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Optional Playwright-rendered fetch backend** (`providermap/render.py`,
+  `site.fetch_mode: "playwright"`, `pip install -e ".[render]"`) for sites
+  whose bot-management blocks plain HTTP clients. Implements the same
+  `AsyncFetcher` protocol as `net.py`'s `Fetcher`, so nothing in
+  `pipeline.py` changed. No bypass/evasion techniques - a normal page load,
+  same as an interactive browser.
+- **JSON-LD-primary profile parsing**
+  (`parser_utils.parse_jsonld_physician`, wired into the AdventHealth
+  adapter's `parse_profile_html`) - reads schema.org `Physician` markup when
+  a site publishes it, falling back to the existing HTML title-scraping only
+  when it doesn't. Adds six new `Provider` fields: `hospital_affiliation`,
+  `accepting_new_patients`, `rating`, `rating_count`, `languages`,
+  `insurance_accepted` (additive schema migration, v2 -> v3).
+- **`providermap trial [--n 10]`** - a live, single-command rehearsal
+  (discover real URLs, enrich a handful for real, auto-export) distinct from
+  the offline `providermap test` and from the `scrape --limit N` + `export`
+  two-step flow.
+- `PROJECT_STATE.md` - a living summary of what's actually verified working
+  against the live AdventHealth site.
+
 ### Fixed
 
+- **`SitemapSource` was silently discovering zero URLs from sitemaps whose
+  `<sitemapindex>` children have no naming convention.** AdventHealth's
+  `sitemap.xml` splits into 15 generically-named children (`?page=1`..`15`);
+  the doctor directory turned out to live entirely in child #8. The previous
+  keyword/child-count heuristic in `_expand()` never recursed into it. Now
+  expands every child unconditionally (bounded by a safety-valve cap, not a
+  targeting heuristic). See `tests/test_sources.py`.
 - Bumped `selectolax` from `0.3.21` to `0.4.10`. The old pin predates Python
   3.14 and has no prebuilt Windows wheel for it, so `pip install` fell back
   to compiling from source and failed without Microsoft's C++ Build Tools
   installed. `0.4.10` ships a prebuilt `cp314-win_amd64` wheel. Verified as a
   drop-in replacement: full test suite passes unchanged against it.
+- `playwright==1.48.0` pins `greenlet==3.1.1` exactly, which has no
+  prebuilt Python 3.14 wheel and fails to build without MSVC Build Tools.
+  Bumped to `playwright==1.61.0`, whose `greenlet` requirement is a range
+  satisfied by the prebuilt `3.5.3` wheel.
+
+### Known limitations
+
+- AdventHealth's rendered profile page is currently blocked by Akamai
+  bot-management for both plain HTTP and a non-evasive Playwright browser
+  (verified directly - see `PROJECT_STATE.md`). JSON-LD, the HTML-scraping
+  fallback, and location-count/site-confidence accuracy are all affected;
+  discovery and vCard-sourced enrichment are not.
 
 ## [1.0.0] - 2026-07-16
 
