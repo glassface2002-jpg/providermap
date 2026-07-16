@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "providermap"
+version = "1.0.0"
+description = "A reusable provider-directory ingestion pipeline, with AdventHealth as the reference adapter."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ProviderMap contributors" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Healthcare Industry",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "httpx[http2]==0.27.2",
+    "selectolax==0.4.10",
+    "PyYAML==6.0.2",
+    "openpyxl==3.1.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.3",
+    "pytest-asyncio==0.24.0",
+    "black==24.10.0",
+    "ruff==0.7.4",
+    "mypy==1.13.0",
+    "types-PyYAML==6.0.12.20240917",
+]
+
+[project.scripts]
+providermap = "providermap.cli:main"
+
+[project.urls]
+Repository = "https://github.com/your-org/providermap"
+
+[tool.setuptools.packages.find]
+include = ["providermap*", "adapters*"]
+
+# --------------------------------------------------------------------------
+# Black - formatting. Ruff enforces import order (its "I" rules) and general
+# lint; Black only reformats. Line length matches Ruff's below so the two
+# never disagree about where to wrap.
+# --------------------------------------------------------------------------
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+# --------------------------------------------------------------------------
+# Ruff - lint + import sorting (replaces a separate isort config; Ruff's "I"
+# rule set implements the same behavior without a second tool to configure).
+# --------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes
+    "I",             # import sorting (isort-equivalent)
+    "UP",            # pyupgrade - modern syntax
+    "B",             # bugbear - common bug patterns
+    "SIM",           # simplify
+    "C4",            # comprehension improvements
+]
+ignore = [
+    "E501",  # line length is Black's job, not Ruff's, to avoid conflicting opinions
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # pytest.raises(...) patterns bugbear sometimes flags
+
+# --------------------------------------------------------------------------
+# mypy - type checking. `adapters/adventhealth/fixtures.py` is intentionally
+# loosely typed (it models heterogeneous raw site data - see its docstring),
+# so it's excluded from strict checks rather than fighting the checker on
+# code whose entire point is to be loosely structured test data.
+# --------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = false  # aspirational; not yet enforced project-wide
+exclude = ["adapters/adventhealth/fixtures\\.py", "tests/"]
+
+[[tool.mypy.overrides]]
+module = ["selectolax.*", "openpyxl.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: lint, type-check, test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff (lint + import order)
+        run: ruff check .
+
+      - name: Black (formatting)
+        run: black --check .
+
+      - name: mypy (type check)
+        # Only on one Python version - type errors don't vary by interpreter
+        # version here, and running it three times just triples the wait.
+        if: matrix.python-version == '3.11'
+        run: mypy providermap adapters
+
+      - name: pytest
+        run: pytest tests/ -v
+
+      - name: Offline pipeline self-test
+        # The same offline, zero-network check `providermap test` runs -
+        # exercises the full pipeline end to end via the CLI entrypoint,
+        # not just the unit tests above.
+        run: python run.py test

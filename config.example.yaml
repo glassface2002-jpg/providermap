@@ -1,0 +1,105 @@
+# ProviderMap configuration.
+#
+# Copy this file to config.yaml and edit politeness.user_agent before running
+# anything against a live site (or set PROVIDERMAP_CONTACT_EMAIL instead -
+# see .env.example). config.yaml is gitignored so local edits never get
+# committed; config.example.yaml is the template everyone shares.
+#
+# Every tunable ProviderMap uses lives here - nothing is hardcoded in the
+# Python source. If you find yourself editing a .py file to change a delay,
+# a timeout, or a path, that's a bug; please file it.
+#
+# These `site` values are AdventHealth's - the only adapter currently
+# registered. A second adapter would ship its own example config, or this
+# file would grow a `sites:` map keyed by adapter name; see CONTRIBUTING.md.
+
+site:
+  base_url: "https://www.adventhealth.com"
+  listing_path: "/doctors"
+
+  # ProviderMap probes for a real API before it will scrape HTML, in this
+  # order (cheapest first): sitemap -> jsonapi -> views_ajax -> html_listing.
+  # Leave force_source null to auto-probe on every run. Set it to one of the
+  # four names once you know which one works, to skip re-probing.
+  force_source: null
+
+  # Only used by the html_listing fallback source.
+  page_param: "page"
+  page_start: 0
+
+  # Structured per-NPI contact-card endpoint, if the site has one (AdventHealth
+  # does). Adapters that supply their own vcard_url() override or ignore this.
+  vcard_path: "/physician/vcard/{npi}"
+
+politeness:
+  # Requests per second against the target site. 0.5 = one request every 2s.
+  requests_per_second: 0.5
+  max_concurrent: 2
+  timeout_seconds: 30
+  user_agent: "ProviderMapBot/1.0 (+contact: REPLACE_WITH_YOUR_EMAIL)"
+
+  # Hard stop if the site starts erroring - do not hammer a site that is
+  # telling you to go away.
+  abort_after_consecutive_errors: 25
+
+  respect_robots_txt: true  # Do not set to false.
+
+retries:
+  max_attempts: 4
+  backoff_base_seconds: 2  # 2, 4, 8, 16
+  backoff_max_seconds: 60
+  retry_on_status: [429, 500, 502, 503, 504]
+
+# ---------------------------------------------------------------------------
+# NPI / NPPES policy
+#
+# NPPES (the free public CMS registry) is what makes the facility-vs-person
+# call authoritative rather than a name-pattern guess. It is optional: with
+# `enabled: false` the pipeline still produces a dataset, using credential and
+# name heuristics instead - every affected record is marked
+# nppes_enumeration='not_found' and given lower site_confidence, so the
+# degradation is visible rather than silent.
+# ---------------------------------------------------------------------------
+nppes:
+  enabled: true
+  api_url: "https://npiregistry.cms.hhs.gov/api/"
+  version: "2.1"
+  requests_per_second: 2.0  # separate budget; CMS is a government API
+  timeout_seconds: 20
+  # If NPPES starts failing, stop asking and fall back to heuristics rather
+  # than spending hours timing out against a dead endpoint.
+  trip_after_consecutive_failures: 20
+
+npi:
+  # strict -> a bad CMS checksum excludes the record
+  # warn   -> kept, flagged in source_notes   (default)
+  # off    -> not checked
+  checksum: "warn"
+  require_npi: true      # exclude records with no NPI at all
+  require_nppes: false   # true -> exclude anything NPPES cannot confirm
+
+database:
+  path: "database/providermap.db"
+
+cache:
+  enabled: true
+  dir: ".cache"
+  ttl_days: 30
+
+logging:
+  dir: "logs"
+  level: "INFO"
+
+investigation:
+  sample_size: 750
+
+incremental:
+  # `providermap refresh` re-checks records older than this many days.
+  refresh_older_than_days: 30
+  # After a COMPLETE discovery pass, mark providers who no longer appear in
+  # the directory as inactive. Never deleted - historical billing rows still
+  # point at them. Skipped automatically on partial/--limit runs.
+  deactivate_missing: true
+
+exports:
+  dir: "exports/output"

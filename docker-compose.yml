@@ -1,0 +1,26 @@
+# Usage:
+#   cp config.example.yaml config.yaml   # then edit politeness.user_agent
+#   docker compose run --rm providermap test              # offline, no setup needed
+#   docker compose run --rm providermap investigate
+#   docker compose run --rm providermap scrape --dry-run --limit 50
+#   docker compose run --rm providermap export
+#
+# `run` (not `up`) is used throughout - this is a batch CLI tool invoked
+# per-command, not a long-running service.
+
+services:
+  providermap:
+    build: .
+    image: providermap:latest
+    volumes:
+      # config.yaml holds your contact email - never baked into the image.
+      - ./config.yaml:/app/config.yaml:ro
+      - ./database:/app/database
+      - ./logs:/app/logs
+      - ./exports/output:/app/exports/output
+      - ./.cache:/app/.cache
+    environment:
+      # Alternative to editing config.yaml's user_agent directly - see
+      # .env.example. Uncomment and set, or use `docker compose run -e`.
+      # - PROVIDERMAP_CONTACT_EMAIL=you@example.com
+      TZ: UTC

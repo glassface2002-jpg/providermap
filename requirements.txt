@@ -1,0 +1,7 @@
+# Runtime dependencies. Kept in sync with [project.dependencies] in
+# pyproject.toml - that file is the source of truth; this one exists for
+# `pip install -r requirements.txt` and for Docker's layer caching.
+httpx[http2]==0.27.2
+selectolax==0.4.10
+PyYAML==6.0.2
+openpyxl==3.1.5

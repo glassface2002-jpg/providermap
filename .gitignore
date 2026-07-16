@@ -1,0 +1,39 @@
+# Virtual environments
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Local configuration - contains a real contact email, never the example.
+config.yaml
+.env
+
+# Data. The whole point of this repo is the pipeline that produces these,
+# not the outputs of any one person's run - none of it belongs in git.
+database/*.db
+database/*.db-wal
+database/*.db-shm
+.cache/
+
+# Generated exports
+exports/output/
+
+# Logs
+logs/*.log
+logs/investigation_report.md
+
+# Editor/OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
