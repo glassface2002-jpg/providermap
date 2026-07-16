@@ -9,10 +9,23 @@ Site-specific patterns - URL shapes, HTML structure, brand-name keyword lists
 
 from __future__ import annotations
 
+import json
 import re
 from re import Pattern
+from typing import Any
 
 from .models import VCardData
+
+_JSONLD_SCRIPT_RE = re.compile(
+    r'<script[^>]*type\s*=\s*["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+# schema.org types that plausibly describe an individual healthcare provider.
+# Sites vary in which one they pick (and sometimes assign more than one via a
+# JSON-LD array on @type), so this is deliberately a set of candidates, not a
+# single expected value.
+_PHYSICIAN_JSONLD_TYPES = {"physician", "person", "medicalorganization", "medicalbusiness"}
 
 
 def npi_checksum_valid(npi: str) -> bool:
@@ -131,6 +144,57 @@ def parse_vcard(text: str) -> VCardData:
             out.zip = padded[6] or None
             out.country = padded[7] or None
     return out
+
+
+def _matches_physician_type(node: dict[str, Any]) -> bool:
+    raw_type = node.get("@type")
+    types = raw_type if isinstance(raw_type, list) else [raw_type]
+    return any(isinstance(t, str) and t.lower() in _PHYSICIAN_JSONLD_TYPES for t in types)
+
+
+def _iter_jsonld_nodes(parsed: Any) -> list[dict[str, Any]]:
+    """Flatten one decoded JSON-LD document into a list of candidate nodes.
+
+    Handles the shapes actually seen in the wild: a single object, a bare
+    array of objects, and an object wrapping its nodes in ``@graph``.
+    """
+    if isinstance(parsed, dict):
+        graph = parsed.get("@graph")
+        if isinstance(graph, list):
+            return [n for n in graph if isinstance(n, dict)]
+        return [parsed]
+    if isinstance(parsed, list):
+        return [n for n in parsed if isinstance(n, dict)]
+    return []
+
+
+def parse_jsonld_physician(html: str) -> dict[str, Any] | None:
+    """Find and decode the schema.org ``Physician``-shaped JSON-LD block on a
+    provider profile page, if the site publishes one.
+
+    JSON-LD is a real, site-agnostic standard (unlike this project's
+    per-adapter HTML scraping), so this lives here rather than in a specific
+    adapter - any :class:`~providermap.adapters.base.SiteAdapter` can reuse
+    it. It only extracts and returns the raw decoded node; mapping its
+    properties onto :class:`~providermap.models.ProfilePage` is adapter-
+    specific, since sites disagree on which schema.org properties they
+    actually populate.
+
+    Never raises: a missing script tag, malformed JSON, or a document with no
+    node matching :data:`_PHYSICIAN_JSONLD_TYPES` all just return ``None``,
+    so a caller can fall back to HTML scraping unconditionally.
+    """
+    if not html:
+        return None
+    for block in _JSONLD_SCRIPT_RE.findall(html):
+        try:
+            parsed = json.loads(block.strip())
+        except json.JSONDecodeError:
+            continue
+        for node in _iter_jsonld_nodes(parsed):
+            if _matches_physician_type(node):
+                return node
+    return None
 
 
 # Longest-match-first street/direction abbreviations used by normalize_address_key.

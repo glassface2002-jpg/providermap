@@ -113,14 +113,28 @@ class VCardData:
 class ProfilePage:
     """Fields extracted from a rendered provider profile page.
 
-    Everything here is a *fallback* source relative to the vCard/NPPES/URL -
-    see the adapter docstrings for why.
+    ``display_name``, ``specialty``, and the fields below are populated from
+    a site's schema.org JSON-LD when the adapter finds one (see
+    :func:`providermap.parser_utils.parse_jsonld_physician`), falling back to
+    HTML scraping otherwise. ``location_ids`` is always structural (counted
+    from appointment-link ids on the page), never JSON-LD - see the adapter
+    docstrings for why the rest is a *fallback* source relative to
+    vCard/NPPES/URL.
     """
 
     display_name: str | None = None
     specialty: str | None = None
     location_ids: list[str] = field(default_factory=list)
     is_error_page: bool = False
+
+    # Sourced from JSON-LD only where a site publishes it; None/empty
+    # otherwise. Not derivable from the vCard endpoint or NPPES.
+    hospital_affiliation: str | None = None
+    accepting_new_patients: bool | None = None
+    rating: float | None = None
+    rating_count: int | None = None
+    languages: list[str] = field(default_factory=list)
+    insurance_accepted: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -157,6 +171,15 @@ class Provider:
     taxonomy_desc: str | None = None
     source_notes: str | None = None
 
+    # From JSON-LD where a site publishes it (see ProfilePage); None/empty
+    # for adapters or records without it.
+    hospital_affiliation: str | None = None
+    accepting_new_patients: bool | None = None
+    rating: float | None = None
+    rating_count: int | None = None
+    languages: list[str] = field(default_factory=list)
+    insurance_accepted: list[str] = field(default_factory=list)
+
     # Read-only bookkeeping populated by the database layer on read.
     provider_id: int | None = None
     created_date: str | None = None
@@ -190,6 +213,12 @@ TRACKED_FIELDS: tuple[str, ...] = (
     "zip",
     "phone",
     "location_count",
+    "hospital_affiliation",
+    "accepting_new_patients",
+    # rating/rating_count deliberately excluded: they fluctuate on their own
+    # and would generate constant, meaningless "changed" noise in
+    # provider_changes on every refresh. The latest value is still stored,
+    # just not diffed.
 )
 
 

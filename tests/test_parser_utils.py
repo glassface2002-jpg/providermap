@@ -10,6 +10,7 @@ from providermap.parser_utils import (
     extract_matches,
     normalize_address_key,
     npi_checksum_valid,
+    parse_jsonld_physician,
     parse_vcard,
     split_name_and_credentials,
     split_person_name,
@@ -136,6 +137,79 @@ class TestAddressNormalization:
     def test_missing_address_or_zip_returns_none(self) -> None:
         assert normalize_address_key(None, "Orlando", "FL", "32801") is None
         assert normalize_address_key("100 Main St", "Orlando", "FL", None) is None
+
+
+class TestJsonLdParsing:
+    def test_finds_physician_typed_node(self) -> None:
+        html = (
+            "<html><head>"
+            '<script type="application/ld+json">'
+            '{"@context": "https://schema.org", "@type": "Physician", '
+            '"name": "Justin Menezes, MD"}'
+            "</script>"
+            "</head><body></body></html>"
+        )
+        node = parse_jsonld_physician(html)
+        assert node is not None
+        assert node["name"] == "Justin Menezes, MD"
+
+    def test_missing_script_tag_returns_none(self) -> None:
+        assert parse_jsonld_physician("<html><body>no jsonld here</body></html>") is None
+
+    def test_empty_html_returns_none(self) -> None:
+        assert parse_jsonld_physician("") is None
+
+    def test_malformed_json_returns_none_not_raise(self) -> None:
+        html = '<script type="application/ld+json">{"@type": "Physician", "name": </script>'
+        assert parse_jsonld_physician(html) is None
+
+    def test_missing_type_returns_none(self) -> None:
+        html = '<script type="application/ld+json">{"name": "no @type here"}</script>'
+        assert parse_jsonld_physician(html) is None
+
+    def test_multiple_script_tags_picks_the_physician_one(self) -> None:
+        html = (
+            '<script type="application/ld+json">'
+            '{"@type": "BreadcrumbList", "itemListElement": []}'
+            "</script>"
+            '<script type="application/ld+json">'
+            '{"@type": "Physician", "name": "Ana Ruiz-Sanchez"}'
+            "</script>"
+        )
+        node = parse_jsonld_physician(html)
+        assert node is not None
+        assert node["name"] == "Ana Ruiz-Sanchez"
+
+    def test_graph_wrapped_nodes_are_searched(self) -> None:
+        html = (
+            '<script type="application/ld+json">'
+            '{"@graph": [{"@type": "WebPage"}, '
+            '{"@type": "Physician", "name": "David Chen, MD"}]}'
+            "</script>"
+        )
+        node = parse_jsonld_physician(html)
+        assert node is not None
+        assert node["name"] == "David Chen, MD"
+
+    def test_array_of_nodes_is_searched(self) -> None:
+        html = (
+            '<script type="application/ld+json">'
+            '[{"@type": "WebPage"}, {"@type": "Physician", "name": "Priya Nair"}]'
+            "</script>"
+        )
+        node = parse_jsonld_physician(html)
+        assert node is not None
+        assert node["name"] == "Priya Nair"
+
+    def test_type_as_list_is_matched(self) -> None:
+        html = (
+            '<script type="application/ld+json">'
+            '{"@type": ["MedicalBusiness", "Physician"], "name": "Kevin Yamada"}'
+            "</script>"
+        )
+        node = parse_jsonld_physician(html)
+        assert node is not None
+        assert node["name"] == "Kevin Yamada"
 
 
 class TestExtractMatches:
