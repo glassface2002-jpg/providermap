@@ -284,6 +284,12 @@ class Pipeline:
             taxonomy_code=tax_code,
             taxonomy_desc=tax_desc,
             location_count=location_count,
+            hospital_affiliation=pg.hospital_affiliation,
+            accepting_new_patients=pg.accepting_new_patients,
+            rating=pg.rating,
+            rating_count=pg.rating_count,
+            languages=pg.languages,
+            insurance_accepted=pg.insurance_accepted,
         )
         provider.site_confidence = V.site_confidence(
             location_count,

@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import re
 from re import Pattern
+from typing import Any
 from urllib.parse import urljoin
 
 from providermap.models import ProfilePage, VCardData
+from providermap.parser_utils import parse_jsonld_physician
 from providermap.parser_utils import parse_vcard as _parse_vcard
 
 from ..base import SiteAdapter
@@ -58,6 +60,104 @@ _ORG_NAME_PATTERNS: list[tuple[Pattern[str], str]] = [
 ]
 
 
+def _text_or_name(value: Any) -> str | None:
+    """A schema.org value that might be a plain string or an object carrying
+    a ``name`` property (e.g. ``{"@type": "Organization", "name": "..."}``)."""
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, dict):
+        name = value.get("name")
+        return name.strip() if isinstance(name, str) and name.strip() else None
+    return None
+
+
+def _as_str_list(value: Any) -> list[str]:
+    """Normalize a schema.org value that may be a single string, a list of
+    strings, or a list of ``{"name": ...}``-shaped objects into a flat list."""
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    out: list[str] = []
+    for item in items:
+        text = _text_or_name(item)
+        if text:
+            out.append(text)
+    return out
+
+
+def _as_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in {"true", "yes", "1"}:
+            return True
+        if low in {"false", "no", "0"}:
+            return False
+    return None
+
+
+def _apply_jsonld(out: ProfilePage, node: dict[str, Any]) -> None:
+    """Map a schema.org Physician-shaped JSON-LD node onto a ``ProfilePage``.
+
+    Property names below are candidate keys, not confirmed against a live
+    page - Akamai bot-management blocked every attempt to inspect real
+    AdventHealth JSON-LD during the investigation that motivated this
+    adapter change (see ``PROJECT_STATE.md``). Each field checks a short
+    list of plausible schema.org property names rather than one assumed-
+    correct one, and every branch leaves the corresponding ``ProfilePage``
+    field at its default instead of raising if the shape doesn't match.
+    Adjust the candidate keys here, not the extraction shape in
+    ``providermap.parser_utils.parse_jsonld_physician``, once real markup
+    has been inspected via the Playwright fetcher.
+    """
+    name = node.get("name")
+    if isinstance(name, str) and name.strip():
+        out.display_name = name.strip()
+
+    specialty = _as_str_list(node.get("medicalSpecialty"))
+    if specialty:
+        out.specialty = ", ".join(specialty)
+
+    for key in ("hospitalAffiliation", "affiliation", "memberOf"):
+        affiliation = _text_or_name(node.get(key))
+        if affiliation:
+            out.hospital_affiliation = affiliation
+            break
+
+    for key in ("acceptingNewPatients", "isAcceptingNewPatients"):
+        if key in node:
+            accepting = _as_bool(node.get(key))
+            if accepting is not None:
+                out.accepting_new_patients = accepting
+                break
+
+    rating_node = node.get("aggregateRating")
+    if isinstance(rating_node, dict):
+        try:
+            value = rating_node.get("ratingValue")
+            if value is not None:
+                out.rating = float(value)
+        except (TypeError, ValueError):
+            pass
+        try:
+            count = rating_node.get("reviewCount") or rating_node.get("ratingCount")
+            if count is not None:
+                out.rating_count = int(count)
+        except (TypeError, ValueError):
+            pass
+
+    languages = _as_str_list(node.get("knowsLanguage") or node.get("availableLanguage"))
+    if languages:
+        out.languages = languages
+
+    for key in ("acceptedInsurance", "insuranceAccepted"):
+        insurance = _as_str_list(node.get(key))
+        if insurance:
+            out.insurance_accepted = insurance
+            break
+
+
 class AdventHealthAdapter(SiteAdapter):
     name = "adventhealth"
 
@@ -83,13 +183,20 @@ class AdventHealthAdapter(SiteAdapter):
         return _parse_vcard(text)
 
     def parse_profile_html(self, html: str) -> ProfilePage:
-        """Extract display name, specialty, and location count.
+        """Extract display name, specialty, location count, and the fields
+        only JSON-LD carries (hospital affiliation, accepting-new-patients,
+        rating, languages, insurance).
 
-        Built from *extracted page text*, not a confirmed live DOM inspection
-        - see the "Known limitations" section of the README. It fails soft:
-        every field independently returns ``None``/empty rather than raising,
-        so a site redesign degrades this adapter's fallback quality without
-        crashing the run.
+        schema.org JSON-LD (via :func:`~providermap.parser_utils.
+        parse_jsonld_physician`) is tried first - a structured, site-
+        published source is strictly more reliable than scraping rendered
+        title text. The og:title/``<title>``-based scraping below is kept as
+        a fallback for whatever JSON-LD doesn't supply, including pages that
+        don't publish it at all: built from *extracted page text*, not a
+        confirmed live DOM inspection - see the "Known limitations" section
+        of the README. Both paths fail soft: every field independently
+        returns ``None``/empty rather than raising, so neither a missing
+        JSON-LD block nor a site redesign crashes the run.
         """
         out = ProfilePage()
         if not html:
@@ -97,30 +204,37 @@ class AdventHealthAdapter(SiteAdapter):
 
         out.location_ids = sorted(set(_LOCATION_ID_RE.findall(html)))
 
-        try:
-            from selectolax.parser import HTMLParser
+        jsonld_node = parse_jsonld_physician(html)
+        if jsonld_node:
+            _apply_jsonld(out, jsonld_node)
 
-            tree = HTMLParser(html)
-        except Exception:
-            tree = None
+        if out.display_name is None or out.specialty is None:
+            try:
+                from selectolax.parser import HTMLParser
 
-        if tree is not None:
-            for node in tree.css('meta[property="og:title"]'):
-                content = node.attributes.get("content")
-                if content:
-                    out.display_name = content.strip()
-                    break
-            if out.display_name is None:
-                h1 = tree.css_first("h1")
-                if h1:
-                    out.display_name = h1.text(strip=True) or None
+                tree = HTMLParser(html)
+            except Exception:
+                tree = None
 
-            # This site's <title> is "Name | Specialty | City, ST | AdventHealth".
-            title = tree.css_first("title")
-            if title:
-                segs = [s.strip() for s in title.text(strip=True).split("|")]
-                if len(segs) >= 2 and segs[1] and segs[1].lower() != "adventhealth":
-                    out.specialty = segs[1]
+            if tree is not None:
+                if out.display_name is None:
+                    for meta in tree.css('meta[property="og:title"]'):
+                        content = meta.attributes.get("content")
+                        if content:
+                            out.display_name = content.strip()
+                            break
+                    if out.display_name is None:
+                        h1 = tree.css_first("h1")
+                        if h1:
+                            out.display_name = h1.text(strip=True) or None
+
+                if out.specialty is None:
+                    # This site's <title> is "Name | Specialty | City, ST | AdventHealth".
+                    title = tree.css_first("title")
+                    if title:
+                        segs = [s.strip() for s in title.text(strip=True).split("|")]
+                        if len(segs) >= 2 and segs[1] and segs[1].lower() != "adventhealth":
+                            out.specialty = segs[1]
 
         lowered = html[:4000].lower()
         if "page not found" in lowered or "404" in (out.display_name or "").lower():

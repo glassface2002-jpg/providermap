@@ -77,6 +77,84 @@ class TestProfileHtmlParsing:
         assert page.location_ids == []
 
 
+class TestJsonLdDrivenParsing:
+    """JSON-LD is tried before the og:title/<title> HTML scrape - see
+    parse_profile_html's docstring. These exercise the full mapping via the
+    adapter, not just parser_utils.parse_jsonld_physician in isolation
+    (covered separately in test_parser_utils.py)."""
+
+    def test_full_jsonld_populates_every_new_field(self, adapter: AdventHealthAdapter) -> None:
+        html = (
+            "<html><head>"
+            '<script type="application/ld+json">'
+            '{"@type": "Physician", "name": "Justin Menezes, MD", '
+            '"medicalSpecialty": ["Family Medicine"], '
+            '"hospitalAffiliation": {"@type": "Hospital", "name": "AdventHealth Orlando"}, '
+            '"acceptingNewPatients": true, '
+            '"aggregateRating": {"ratingValue": 4.8, "reviewCount": 132}, '
+            '"knowsLanguage": ["English", "Spanish"], '
+            '"acceptedInsurance": ["Aetna", "Cigna"]}'
+            "</script>"
+            "</head><body></body></html>"
+        )
+        page = adapter.parse_profile_html(html)
+        assert page.display_name == "Justin Menezes, MD"
+        assert page.specialty == "Family Medicine"
+        assert page.hospital_affiliation == "AdventHealth Orlando"
+        assert page.accepting_new_patients is True
+        assert page.rating == 4.8
+        assert page.rating_count == 132
+        assert page.languages == ["English", "Spanish"]
+        assert page.insurance_accepted == ["Aetna", "Cigna"]
+
+    def test_partial_jsonld_leaves_unsupplied_fields_at_default(
+        self, adapter: AdventHealthAdapter
+    ) -> None:
+        html = (
+            '<script type="application/ld+json">'
+            '{"@type": "Physician", "name": "Ana Ruiz-Sanchez"}'
+            "</script>"
+        )
+        page = adapter.parse_profile_html(html)
+        assert page.display_name == "Ana Ruiz-Sanchez"
+        assert page.hospital_affiliation is None
+        assert page.accepting_new_patients is None
+        assert page.rating is None
+        assert page.rating_count is None
+        assert page.languages == []
+        assert page.insurance_accepted == []
+
+    def test_malformed_jsonld_falls_back_to_html_scraping(
+        self, adapter: AdventHealthAdapter
+    ) -> None:
+        html = (
+            "<html><head>"
+            '<script type="application/ld+json">{"@type": "Physician", "name": </script>'
+            '<meta property="og:title" content="David Chen, MD" />'
+            "<title>David Chen, MD | Cardiovascular Disease | Orlando, FL | AdventHealth</title>"
+            "</head><body></body></html>"
+        )
+        page = adapter.parse_profile_html(html)
+        assert page.display_name == "David Chen, MD"
+        assert page.specialty == "Cardiovascular Disease"
+        assert page.hospital_affiliation is None
+
+    def test_no_jsonld_at_all_falls_back_to_html_scraping(
+        self, adapter: AdventHealthAdapter
+    ) -> None:
+        html = (
+            "<html><head>"
+            '<meta property="og:title" content="Priya Nair, APRN" />'
+            "<title>Priya Nair, APRN | Family Medicine | Tampa, FL | AdventHealth</title>"
+            "</head><body></body></html>"
+        )
+        page = adapter.parse_profile_html(html)
+        assert page.display_name == "Priya Nair, APRN"
+        assert page.specialty == "Family Medicine"
+        assert page.hospital_affiliation is None
+        assert page.rating is None
+
+
 class TestOrganizationNamePatterns:
     def test_adventhealth_brand_prefix_is_a_facility_fallback(
         self,

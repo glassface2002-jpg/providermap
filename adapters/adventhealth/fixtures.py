@@ -85,6 +85,12 @@ class FixtureRecord:
     of: int | None = None
     url: str = ""
     name: str = ""
+    # Raw <script type="application/ld+json"> body text to inject into this
+    # record's rendered profile page, if any. None (the default, and true for
+    # nearly every record in this dataset) means no JSON-LD block at all -
+    # exercising the pure-HTML-fallback path, which is the common case on
+    # sites that don't publish schema.org markup.
+    jsonld: str | None = None
 
 
 _FIRST = [
@@ -460,6 +466,43 @@ def build_dataset() -> dict[str, Any]:
             r.url = f"{BASE}/doctors/{_slug(nm + '-' + r.cred)}-{r.npi}"
             r.name = f"{nm}, {r.cred}" if r.cred else nm
 
+    # A few already-existing physician records also carry schema.org JSON-LD
+    # on their profile page, to exercise the JSON-LD-primary/HTML-fallback
+    # path (see providermap.parser_utils.parse_jsonld_physician and
+    # adapters.adventhealth.adapter._apply_jsonld). Attached here rather than
+    # via new records, so EXPECTED's fixed counts are unaffected.
+    records[0].jsonld = json.dumps(
+        {
+            "@context": "https://schema.org",
+            "@type": "Physician",
+            "name": records[0].name,
+            "medicalSpecialty": [records[0].specialty],
+            "hospitalAffiliation": {"@type": "Hospital", "name": "AdventHealth Orlando"},
+            "acceptingNewPatients": True,
+            "aggregateRating": {
+                "@type": "AggregateRating",
+                "ratingValue": 4.8,
+                "reviewCount": 132,
+            },
+            "knowsLanguage": ["English", "Spanish"],
+            "acceptedInsurance": ["Aetna", "Cigna", "UnitedHealthcare"],
+        }
+    )
+    records[1].jsonld = json.dumps(
+        {
+            "@context": "https://schema.org",
+            "@type": "Physician",
+            "name": records[1].name,
+            "medicalSpecialty": [records[1].specialty],
+            # Deliberately no hospitalAffiliation/aggregateRating/
+            # knowsLanguage/acceptedInsurance - each ProfilePage field they'd
+            # populate must independently stay at its default, not raise.
+        }
+    )
+    # Malformed/truncated JSON - must be skipped cleanly, falling back to the
+    # og:title/<title> HTML scraping already present on the same page.
+    records[2].jsonld = '{"@context": "https://schema.org", "@type": "Physician", "name": '
+
     return {
         "records": records,
         "by_npi": {r.npi: r for r in records},
@@ -513,11 +556,13 @@ def render_profile_html(rec: FixtureRecord) -> str | None:
         f'<a href="/request-appointment-0?npi={rec.npi}&location={15050100 + i}">Request</a>'
         for i in range(rec.locations)
     )
+    jsonld_block = f'<script type="application/ld+json">{rec.jsonld}</script>' if rec.jsonld else ""
     return (
         "<!DOCTYPE html><html><head>"
         '<meta name="Generator" content="Drupal 11 (https://www.drupal.org)" />'
         f'<meta property="og:title" content="{rec.name}" />'
         f"<title>{rec.name} | {spec} | {city}, {st} | AdventHealth</title>"
+        f"{jsonld_block}"
         f"</head><body><h1>{rec.name}</h1>"
         f'<a href="{rec.url.replace(BASE, "")}">profile</a>{appt}</body></html>'
     )
