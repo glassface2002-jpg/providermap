@@ -123,6 +123,46 @@ class TestPipelineAgainstFixture:
         assert excluded >= 1
 
 
+class TestJsonLdFieldsFlowThroughPipeline:
+    """Records 0/1/2 in the fixture dataset carry, respectively, full,
+    partial, and malformed JSON-LD (see fixtures.build_dataset) - this checks
+    the new Provider fields survive discovery -> parsing -> classification ->
+    storage for all three, not just the adapter-level unit tests."""
+
+    def test_full_jsonld_record_stores_every_new_field(
+        self, offline_run: dict[str, int], db: Database
+    ) -> None:
+        npi = DATASET["records"][0].npi
+        p = db.get_provider(npi=npi)
+        assert p is not None
+        assert p.hospital_affiliation == "AdventHealth Orlando"
+        assert p.accepting_new_patients is True
+        assert p.rating == 4.8
+        assert p.rating_count == 132
+        assert p.languages == ["English", "Spanish"]
+        assert p.insurance_accepted == ["Aetna", "Cigna", "UnitedHealthcare"]
+
+    def test_partial_jsonld_record_leaves_unsupplied_fields_null(
+        self, offline_run: dict[str, int], db: Database
+    ) -> None:
+        npi = DATASET["records"][1].npi
+        p = db.get_provider(npi=npi)
+        assert p is not None
+        assert p.hospital_affiliation is None
+        assert p.accepting_new_patients is None
+        assert p.rating is None
+        assert p.languages == []
+
+    def test_malformed_jsonld_record_falls_back_and_still_stores_correctly(
+        self, offline_run: dict[str, int], db: Database
+    ) -> None:
+        rec = DATASET["records"][2]
+        p = db.get_provider(npi=rec.npi)
+        assert p is not None
+        assert p.full_name == f"{rec.first} {rec.last}"
+        assert p.hospital_affiliation is None
+
+
 class TestPipelineWithNppesDisabled:
     """The pipeline must still produce a full dataset with NPPES off - just a
     less confident one. This is the config.example.yaml `nppes.enabled: false`

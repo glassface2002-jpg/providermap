@@ -67,6 +67,12 @@ def export_providers(db: Database, out: Path) -> int:
         "Provider Type",
         "Location Count",
         "Site Confidence",
+        "Hospital Affiliation",
+        "Accepting New Patients",
+        "Rating",
+        "Rating Count",
+        "Languages",
+        "Insurance Accepted",
         "First Seen",
         "Last Seen",
     ]
@@ -77,13 +83,19 @@ def export_providers(db: Database, out: Path) -> int:
         SELECT full_name, credentials, specialty, primary_site_of_care,
                practice_name, address, city, state, zip, phone, profile_url,
                npi, provider_type, location_count, site_confidence,
+               hospital_affiliation, accepting_new_patients, rating,
+               rating_count, languages, insurance_accepted,
                first_seen, last_seen
         FROM providers WHERE is_active = 1
         ORDER BY last_name, first_name, full_name
         """
     ).fetchall()
     for r in rows:
-        ws.append([r[k] for k in r.keys()])  # noqa: SIM118 - sqlite3.Row, not a dict
+        values = [r[k] for k in r.keys()]  # noqa: SIM118 - sqlite3.Row, not a dict
+        anp_idx = r.keys().index("accepting_new_patients")
+        if values[anp_idx] is not None:
+            values[anp_idx] = "Yes" if values[anp_idx] else "No"
+        ws.append(values)
 
     conf_col = headers.index("Site Confidence") + 1
     for row in range(2, ws.max_row + 1):
@@ -91,7 +103,10 @@ def export_providers(db: Database, out: Path) -> int:
             for col in range(1, len(headers) + 1):
                 ws.cell(row, col).fill = _FLAG_FILL
 
-    _style(ws, [28, 16, 26, 34, 34, 32, 18, 8, 10, 15, 58, 14, 24, 14, 14, 22, 22])
+    _style(
+        ws,
+        [28, 16, 26, 34, 34, 32, 18, 8, 10, 15, 58, 14, 24, 14, 14, 28, 16, 10, 12, 26, 30, 22, 22],
+    )
 
     gone = db.conn.execute(
         """

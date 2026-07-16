@@ -96,6 +96,52 @@ class TestProviderDedupe:
         assert dupes[0]["n"] == 2
 
 
+class TestJsonLdSourcedFields:
+    """hospital_affiliation/accepting_new_patients/rating/rating_count are
+    plain columns; languages/insurance_accepted are list[str] on Provider but
+    stored as a single comma-joined TEXT column (see database._LIST_COLS) -
+    this covers that round trip specifically."""
+
+    def test_new_fields_round_trip_through_upsert_and_get(self, db: Database) -> None:
+        db.upsert_provider(
+            _provider(
+                hospital_affiliation="AdventHealth Orlando",
+                accepting_new_patients=True,
+                rating=4.8,
+                rating_count=132,
+                languages=["English", "Spanish"],
+                insurance_accepted=["Aetna", "Cigna"],
+            )
+        )
+        got = db.get_provider(npi="1194013169")
+        assert got is not None
+        assert got.hospital_affiliation == "AdventHealth Orlando"
+        assert got.accepting_new_patients is True
+        assert got.rating == 4.8
+        assert got.rating_count == 132
+        assert got.languages == ["English", "Spanish"]
+        assert got.insurance_accepted == ["Aetna", "Cigna"]
+
+    def test_absent_new_fields_round_trip_to_falsy_defaults(self, db: Database) -> None:
+        db.upsert_provider(_provider())
+        got = db.get_provider(npi="1194013169")
+        assert got is not None
+        assert got.hospital_affiliation is None
+        assert got.accepting_new_patients is None
+        assert got.languages == []
+        assert got.insurance_accepted == []
+
+    def test_rating_change_alone_is_unchanged_not_a_tracked_change(self, db: Database) -> None:
+        """rating/rating_count are deliberately excluded from TRACKED_FIELDS
+        (see models.TRACKED_FIELDS's comment) - they fluctuate on their own
+        and would otherwise spam provider_changes on every refresh. If rating
+        were mistakenly tracked, the content hash would differ here and this
+        would report CHANGED instead."""
+        db.upsert_provider(_provider(rating=4.5))
+        _, outcome = db.upsert_provider(_provider(rating=4.9))
+        assert outcome == UpsertOutcome.UNCHANGED
+
+
 class TestIncrementalChangeDetection:
     def test_identical_write_is_unchanged(self, db: Database) -> None:
         db.upsert_provider(_provider())
@@ -266,6 +312,70 @@ class TestSchemaMigration:
             "value"
         ]
         assert int(version) >= 2
+
+    def test_v2_database_gains_jsonld_columns_without_data_loss(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """v3 added hospital_affiliation/accepting_new_patients/rating/
+        rating_count/languages/insurance_accepted (see Database._migrate's
+        `additions["providers"]`) - a v2 database must gain them additively,
+        same as the v1->v2 migration in test_v1_database_migrates_without_data_loss."""
+        path = tmp_path / "v2.db"
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            """
+            CREATE TABLE providers (provider_id INTEGER PRIMARY KEY, full_name TEXT,
+                first_name TEXT, last_name TEXT, credentials TEXT, provider_type TEXT,
+                specialty TEXT, primary_site_of_care TEXT, practice_name TEXT,
+                address TEXT, city TEXT, state TEXT, zip TEXT, phone TEXT,
+                profile_url TEXT UNIQUE, npi TEXT UNIQUE, created_date DATETIME,
+                updated_date DATETIME, location_count INTEGER DEFAULT 1,
+                site_confidence TEXT, nppes_enumeration TEXT, nppes_name_match INTEGER,
+                taxonomy_code TEXT, taxonomy_desc TEXT, source_notes TEXT,
+                content_hash TEXT, first_seen DATETIME, last_seen DATETIME,
+                last_checked DATETIME, last_seen_run_id INTEGER,
+                is_active INTEGER DEFAULT 1);
+            CREATE TABLE locations (location_id INTEGER PRIMARY KEY, facility_name TEXT,
+                address TEXT, city TEXT, state TEXT, zip TEXT, phone TEXT,
+                address_key TEXT UNIQUE, first_seen DATETIME, last_seen DATETIME);
+            CREATE TABLE provider_locations (id INTEGER PRIMARY KEY, provider_id INTEGER,
+                location_id INTEGER, is_primary INTEGER DEFAULT 0, rank INTEGER,
+                is_active INTEGER DEFAULT 1);
+            CREATE TABLE excluded_records (id INTEGER PRIMARY KEY, name TEXT,
+                url TEXT UNIQUE, classification TEXT, reason_excluded TEXT, npi TEXT,
+                date_found DATETIME, last_seen DATETIME);
+            CREATE TABLE scrape_log (id INTEGER PRIMARY KEY, url TEXT UNIQUE,
+                status TEXT, attempts INTEGER DEFAULT 0, error_message TEXT,
+                timestamp DATETIME, last_fetched DATETIME, run_id INTEGER);
+            CREATE TABLE run_stats (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT);
+        """
+        )
+        conn.execute(
+            "INSERT INTO providers (full_name, npi, profile_url, city, provider_type, "
+            "is_active) VALUES ('Existing Person', '1194013169', "
+            "'https://x/a-1194013169', 'Orlando', 'Physician', 1)"
+        )
+        conn.execute("INSERT INTO schema_meta (key, value) VALUES ('version', '2')")
+        conn.commit()
+        conn.close()
+
+        db = Database(path)  # migration runs here
+        row = db.conn.execute(
+            "SELECT full_name, hospital_affiliation, accepting_new_patients, rating, "
+            "rating_count, languages, insurance_accepted FROM providers"
+        ).fetchone()
+        assert row["full_name"] == "Existing Person"  # untouched by the migration
+        assert row["hospital_affiliation"] is None
+        assert row["accepting_new_patients"] is None
+        assert row["rating"] is None
+        assert row["rating_count"] is None
+        assert row["languages"] is None
+        assert row["insurance_accepted"] is None
+
+        version = db.conn.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()[
+            "value"
+        ]
+        assert int(version) >= 3
+        db.close()
 
 
 class TestRuns:

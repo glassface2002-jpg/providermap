@@ -75,7 +75,7 @@ from .models import (
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -237,7 +237,18 @@ WRITE_COLS: tuple[str, ...] = (
     "taxonomy_code",
     "taxonomy_desc",
     "source_notes",
+    "hospital_affiliation",
+    "accepting_new_patients",
+    "rating",
+    "rating_count",
+    "languages",
+    "insurance_accepted",
 )
+
+# languages/insurance_accepted are list[str] on Provider but stored as a
+# single comma-joined TEXT column - simpler than a join table for data that's
+# read as a whole, never queried by individual member.
+_LIST_COLS = {"languages", "insurance_accepted"}
 
 # Dedupe keys are never overwritten with NULL by a later pass - a re-scrape
 # that fails to determine one keeps what was already proven correct.
@@ -261,15 +272,17 @@ def _normalize_for_diff(value: object) -> str | None:
     return str(value)
 
 
-def _provider_row_values(p: Provider) -> list[str | int | None]:
+def _provider_row_values(p: Provider) -> list[str | int | float | None]:
     """Serialize a Provider's WRITE_COLS to SQL-ready values (enums -> str)."""
-    values: list[str | int | None] = []
+    values: list[str | int | float | None] = []
     for col in WRITE_COLS:
         v = getattr(p, col)
         if isinstance(v, ProviderType | Confidence):
             v = v.value
         elif isinstance(v, bool):
             v = int(v)
+        elif col in _LIST_COLS:
+            v = ", ".join(v) if v else None
         values.append(v)
     return values
 
@@ -308,6 +321,26 @@ def _row_to_provider(row: sqlite3.Row) -> Provider:
         taxonomy_code=row["taxonomy_code"],
         taxonomy_desc=row["taxonomy_desc"],
         source_notes=row["source_notes"],
+        hospital_affiliation=(
+            row["hospital_affiliation"] if "hospital_affiliation" in keys else None
+        ),
+        accepting_new_patients=(
+            bool(row["accepting_new_patients"])
+            if "accepting_new_patients" in keys and row["accepting_new_patients"] is not None
+            else None
+        ),
+        rating=row["rating"] if "rating" in keys else None,
+        rating_count=row["rating_count"] if "rating_count" in keys else None,
+        languages=(
+            [s.strip() for s in row["languages"].split(",") if s.strip()]
+            if "languages" in keys and row["languages"]
+            else []
+        ),
+        insurance_accepted=(
+            [s.strip() for s in row["insurance_accepted"].split(",") if s.strip()]
+            if "insurance_accepted" in keys and row["insurance_accepted"]
+            else []
+        ),
         created_date=row["created_date"],
         updated_date=row["updated_date"],
         first_seen=row["first_seen"] if "first_seen" in keys else None,
@@ -356,6 +389,12 @@ class Database:
                 ("last_checked", "DATETIME"),
                 ("last_seen_run_id", "INTEGER"),
                 ("is_active", "INTEGER DEFAULT 1"),
+                ("hospital_affiliation", "TEXT"),
+                ("accepting_new_patients", "INTEGER"),
+                ("rating", "REAL"),
+                ("rating_count", "INTEGER"),
+                ("languages", "TEXT"),
+                ("insurance_accepted", "TEXT"),
             ],
             "locations": [("first_seen", "DATETIME"), ("last_seen", "DATETIME")],
             "provider_locations": [("is_active", "INTEGER DEFAULT 1")],
