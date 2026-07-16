@@ -36,6 +36,12 @@ log = logging.getLogger(__name__)
 
 _LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.IGNORECASE)
 
+# Safety valve for SitemapSource._expand(), not a targeting heuristic - see
+# that method's docstring. The sitemap protocol allows a <sitemapindex> up to
+# 50,000 children; this just bounds worst-case request volume for a
+# pathological site rather than trying to guess which children matter.
+_MAX_SITEMAP_FILES = 200
+
 
 class Source(ABC):
     """A strategy for enumerating provider profile URLs on one site."""
@@ -72,15 +78,16 @@ class SitemapSource(Source):
         """A sitemap being present isn't enough - it has to actually lead to
         profile URLs. Some sites' `/sitemap.xml` is a generic, site-wide
         sitemap (blog posts, location pages, everything) with no
-        directory-specific content on its first page; naively accepting any
-        file with a `<loc>` tag caused a real, silent failure (the source got
-        selected, "found" nothing, and the run reported zero results instead
-        of falling through to the next strategy).
+        directory-specific content; naively accepting any file with a `<loc>`
+        tag caused a real, silent failure (the source got selected, "found"
+        nothing, and the run reported zero results instead of falling through
+        to the next strategy).
 
         A `<sitemapindex>`'s own `<loc>` entries point to other sitemap
-        *files*, not content pages, so they're checked differently: peek into
-        the first couple of children rather than expecting the index itself
-        to contain profile URLs.
+        *files*, not content pages, so this delegates to :meth:`_expand` to
+        fully resolve the index before checking for a match - see that
+        method's docstring for why a shallow peek at the first couple of
+        children isn't reliable.
         """
         pattern = self.adapter.profile_url_pattern()
 
@@ -90,22 +97,8 @@ class SitemapSource(Source):
             if not body or "<loc>" not in body.lower():
                 continue
 
-            locs = _LOC_RE.findall(body)
-            is_index = "<sitemapindex" in body[:2000].lower()
-
-            if is_index:
-                found = False
-                for child in locs[:2]:
-                    child_body = await self.fetcher.get(child, use_cache=False)
-                    if child_body and any(
-                        pattern.match(loc) for loc in _LOC_RE.findall(child_body)[:500]
-                    ):
-                        found = True
-                        break
-            else:
-                found = any(pattern.match(loc) for loc in locs[:500])
-
-            if not found:
+            locs = await self._expand(url, set())
+            if not any(pattern.match(loc) for loc in locs):
                 log.info(
                     "%s has <loc> entries but none lead to URLs matching this "
                     "adapter's profile pattern - not using it as the discovery "
@@ -120,7 +113,21 @@ class SitemapSource(Source):
         return False
 
     async def _expand(self, url: str, seen: set[str]) -> list[str]:
-        if url in seen:
+        """Recursively resolve a sitemap URL down to its `<loc>` entries.
+
+        A `<sitemapindex>` is expanded into *every* child file, not just ones
+        whose filename looks provider-related. AdventHealth's own
+        `sitemap.xml` splits into 15 children named `?page=1`..`?page=15`
+        with no naming convention indicating which one holds the doctor
+        directory (it turned out to be page 8, discovered only by checking
+        each one) - a keyword-match skip heuristic here previously caused the
+        source to silently resolve to zero URLs on a site whose sitemap
+        genuinely had the full directory in it. `_MAX_SITEMAP_FILES` is a
+        safety valve, not a targeting heuristic, for the rare index that
+        legitimately has hundreds of unrelated children (the sitemap
+        protocol permits up to 50,000).
+        """
+        if url in seen or len(seen) >= _MAX_SITEMAP_FILES:
             return []
         seen.add(url)
         body = await self.fetcher.get(url)
@@ -131,8 +138,7 @@ class SitemapSource(Source):
             return locs
         out: list[str] = []
         for child in locs:
-            if re.search(r"doctor|physician|provider|find", child, re.I) or len(locs) <= 12:
-                out.extend(await self._expand(child, seen))
+            out.extend(await self._expand(child, seen))
         return out
 
     async def urls(self, max_items: int | None = None) -> AsyncIterator[str]:
