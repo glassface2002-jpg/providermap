@@ -358,6 +358,75 @@ async def cmd_test(config: Config, adapter: SiteAdapter, args: argparse.Namespac
         sys.exit(1)
 
 
+async def cmd_trial(config: Config, adapter: SiteAdapter, args: argparse.Namespace) -> None:
+    """A small, live, single-command rehearsal: discover real URLs, enrich a
+    handful of them for real, and auto-export for hand review - distinct
+    from the offline ``providermap test`` (fixture-only, zero network) and
+    from the normal ``scrape [--limit N]`` + ``export`` two-step flow (this
+    runs both automatically, capped at ``--n`` records). Writes to the real
+    database, same as ``scrape --limit N`` does; only the export directory
+    (``exports/output/trial/``) is separated out, so it never overwrites a
+    full run's ``providers.xlsx``.
+    """
+    if args.test:
+        print(
+            "\n--test doesn't apply to `trial` - trial's entire point is a "
+            "live run. Use `providermap test` for the offline fixture "
+            "pipeline instead.\n",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    from .exporter import export_all
+
+    n = args.n
+    db = Database(db_path(config, False))
+    cache = Cache(config.cache.dir, config.cache.enabled, config.cache.ttl_days)
+    pipeline = Pipeline(config, db, adapter, dry_run=False)
+    db.start_run(mode="trial")
+
+    async with make_fetcher(config, cache, False, adapter.name) as f:
+        nppes = NppesClient(f, config)
+        # A handful more URLs than `n` are discovered up front, since some
+        # will classify as facilities/organizations and get excluded before
+        # ever counting toward the `n` individuals `enrich_all` stops at.
+        await pipeline.discover_urls(f, max_items=max(n * 5, 50))
+        try:
+            tally = await pipeline.enrich_all(f, nppes, limit=n)
+        except RuntimeError as exc:
+            print(f"\n{exc}\n", file=sys.stderr)
+            db.finish_run(notes=str(exc)[:200])
+            db.close()
+            sys.exit(1)
+
+    t = tally.as_dict()
+    db.finish_run(
+        urls_discovered=db.counts()["urls_total"],
+        providers_new=t.get("new", 0),
+        providers_changed=t.get("changed", 0),
+        providers_unchanged=t.get("unchanged", 0),
+        excluded=t.get("excluded", 0),
+        errors=t.get("error", 0),
+        source_used=pipeline.source.name if pipeline.source else None,
+        notes="trial run - partial by design, deactivate_missing not run",
+    )
+
+    outdir = Path(config.exports.dir) / "trial"
+    export_all(db, outdir)
+
+    print(f"\nTrial run complete - requested {n} record(s).")
+    print(f"  source used     : {pipeline.source.name if pipeline.source else 'n/a'}")
+    print(f"  new             : {t.get('new', 0)}")
+    print(f"  changed         : {t.get('changed', 0)}")
+    print(f"  unchanged       : {t.get('unchanged', 0)}")
+    print(f"  excluded        : {t.get('excluded', 0)}")
+    print(f"  errors          : {t.get('error', 0)}")
+    tripped = " (CIRCUIT BREAKER TRIPPED)" if nppes.tripped else ""
+    print(f"  NPPES           : {nppes.hits} hits / {nppes.misses} misses{tripped}")
+    print(f"\nWrote review workbooks to {outdir}\n")
+    db.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="providermap",
@@ -367,6 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
             "    providermap test\n\n"
             "Against a live site:\n"
             "    providermap investigate\n"
+            "    providermap trial            # live, 10 records, auto-exports\n"
             "    providermap scrape --dry-run --limit 50\n"
             "    providermap scrape\n"
             "    providermap export\n\n"
@@ -418,6 +488,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--older-than", type=int, default=None, metavar="DAYS")
     common(p)
 
+    p = sub.add_parser("trial", help="live rehearsal: discover + enrich N records + auto-export")
+    p.add_argument("--n", type=int, default=10, help="how many records to enrich (default: 10)")
+    common(p, dry=False)
+
     p = sub.add_parser("export", help="write providers/excluded/summary xlsx")
     common(p, dry=False)
 
@@ -448,7 +522,7 @@ def main(argv: list[str] | None = None) -> None:
     setup_logging(config)
     adapter = make_adapter(config, args.adapter)
 
-    live = args.cmd in {"investigate", "discover", "scrape", "refresh"} and not getattr(
+    live = args.cmd in {"investigate", "discover", "scrape", "refresh", "trial"} and not getattr(
         args, "test", False
     )
     if live:
@@ -464,6 +538,8 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_run_pipeline(config, adapter, args, mode="full"))
     elif args.cmd == "refresh":
         asyncio.run(_run_pipeline(config, adapter, args, mode="refresh"))
+    elif args.cmd == "trial":
+        asyncio.run(cmd_trial(config, adapter, args))
     elif args.cmd == "export":
         cmd_export(config, args)
     elif args.cmd == "status":
