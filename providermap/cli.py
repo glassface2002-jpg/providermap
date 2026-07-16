@@ -517,8 +517,16 @@ def main(argv: list[str] | None = None) -> None:
     try:
         config = load_config(args.config)
     except FileNotFoundError as exc:
-        print(f"\n{exc}\n", file=sys.stderr)
-        sys.exit(2)
+        # `providermap test` is documented as "no config file needed" (see
+        # the Quick start help text below) - it's fully offline and never
+        # reads politeness/contact-email settings, so config.example.yaml's
+        # placeholder values are fine here. Every other command still
+        # requires a real config.yaml.
+        if args.cmd == "test" and args.config == "config.yaml":
+            config = load_config("config.example.yaml")
+        else:
+            print(f"\n{exc}\n", file=sys.stderr)
+            sys.exit(2)
     setup_logging(config)
     adapter = make_adapter(config, args.adapter)
 
