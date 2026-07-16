@@ -8,7 +8,7 @@ common and most welcome kind of contribution.
 ## Development setup
 
 ```bash
-git clone https://github.com/your-org/providermap.git
+git clone https://github.com/glassface2002-jpg/providermap.git
 cd providermap
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate

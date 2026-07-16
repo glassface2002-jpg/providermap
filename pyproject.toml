@@ -50,7 +50,7 @@ render = [
 providermap = "providermap.cli:main"
 
 [project.urls]
-Repository = "https://github.com/your-org/providermap"
+Repository = "https://github.com/glassface2002-jpg/providermap"
 
 [tool.setuptools.packages.find]
 include = ["providermap*", "adapters*"]
