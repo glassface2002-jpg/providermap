@@ -32,6 +32,10 @@ class SiteConfig:
     page_param: str = "page"
     page_start: int = 0
     vcard_path: str = ""
+    # "http" (plain httpx, the default) or "playwright" (real browser
+    # rendering - see RenderingConfig). Needed for sites whose bot-management
+    # (e.g. Akamai) blocks plain HTTP clients but not a normal browser.
+    fetch_mode: str = "http"
 
 
 @dataclass
@@ -81,6 +85,19 @@ class LoggingConfig:
 
 
 @dataclass
+class RenderingConfig:
+    """Only consulted when ``site.fetch_mode == "playwright"``. Kept as its
+    own section (rather than folded into ``politeness``) because it's
+    optional infrastructure most adapters/sites never need - see
+    ``providermap/render.py``.
+    """
+
+    headless: bool = True
+    browser: str = "chromium"
+    wait_after_load_seconds: float = 1.5
+
+
+@dataclass
 class InvestigationConfig:
     sample_size: int = 750
 
@@ -108,6 +125,7 @@ class Config:
     database: DatabaseConfig
     cache: CacheConfig
     logging: LoggingConfig
+    rendering: RenderingConfig
     investigation: InvestigationConfig
     incremental: IncrementalConfig
     exports: ExportsConfig
@@ -137,6 +155,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         database=DatabaseConfig(**raw.get("database", {})),
         cache=CacheConfig(**raw.get("cache", {})),
         logging=LoggingConfig(**raw.get("logging", {})),
+        rendering=RenderingConfig(**raw.get("rendering", {})),
         investigation=InvestigationConfig(**raw.get("investigation", {})),
         incremental=IncrementalConfig(**raw.get("incremental", {})),
         exports=ExportsConfig(**raw.get("exports", {})),

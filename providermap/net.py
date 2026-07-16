@@ -21,9 +21,27 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from .config import Config
+from .config import Config, RetryConfig
 
 log = logging.getLogger(__name__)
+
+
+def compute_backoff(
+    attempt: int, retries: RetryConfig, resp: httpx.Response | None = None
+) -> float:
+    """Delay before the next retry - shared by every fetch backend
+    (:class:`Fetcher`, ``providermap.render.PlaywrightFetcher``) so backoff
+    policy is defined once. Honors ``Retry-After`` when a response carries
+    one, otherwise exponential backoff off ``retries.backoff_base_seconds``.
+    """
+    if resp is not None:
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), retries.backoff_max_seconds)
+            except ValueError:
+                pass
+    return min(retries.backoff_base_seconds**attempt, retries.backoff_max_seconds)
 
 
 class AsyncFetcher(Protocol):
@@ -263,11 +281,4 @@ class Fetcher:
         return None
 
     def _backoff(self, attempt: int, resp: httpx.Response | None = None) -> float:
-        if resp is not None:
-            retry_after = resp.headers.get("Retry-After")
-            if retry_after:
-                try:
-                    return min(float(retry_after), self.retries.backoff_max_seconds)
-                except ValueError:
-                    pass
-        return min(self.retries.backoff_base_seconds**attempt, self.retries.backoff_max_seconds)
+        return compute_backoff(attempt, self.retries, resp)

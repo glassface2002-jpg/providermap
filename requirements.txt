@@ -1,6 +1,11 @@
 # Runtime dependencies. Kept in sync with [project.dependencies] in
 # pyproject.toml - that file is the source of truth; this one exists for
 # `pip install -r requirements.txt` and for Docker's layer caching.
+#
+# Playwright (providermap/render.py, site.fetch_mode: "playwright") is a
+# separate optional extra, not listed here - see [project.optional-
+# dependencies].render in pyproject.toml. Install it with
+# `pip install -e ".[render]"` followed by `playwright install chromium`.
 httpx[http2]==0.27.2
 selectolax==0.4.10
 PyYAML==6.0.2

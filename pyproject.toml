@@ -37,6 +37,14 @@ dev = [
     "mypy==1.13.0",
     "types-PyYAML==6.0.12.20240917",
 ]
+# Only needed for site.fetch_mode: "playwright" (providermap/render.py) -
+# sites whose bot-management blocks plain HTTP. Most adapters/sites don't
+# need this, hence a separate extra rather than a hard dependency: install
+# with `pip install -e ".[render]"`, then a one-time
+# `playwright install chromium` to download the browser binary itself.
+render = [
+    "playwright==1.48.0",
+]
 
 [project.scripts]
 providermap = "providermap.cli:main"
@@ -96,7 +104,7 @@ disallow_untyped_defs = false  # aspirational; not yet enforced project-wide
 exclude = ["adapters/adventhealth/fixtures\\.py", "tests/"]
 
 [[tool.mypy.overrides]]
-module = ["selectolax.*", "openpyxl.*"]
+module = ["selectolax.*", "openpyxl.*", "playwright.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -31,6 +31,14 @@ site:
   # does). Adapters that supply their own vcard_url() override or ignore this.
   vcard_path: "/physician/vcard/{npi}"
 
+  # "http" (plain httpx client, default) or "playwright" (real browser
+  # rendering - see the `rendering:` section below). AdventHealth's Akamai
+  # bot-management blocks plain HTTP clients (including on robots.txt
+  # itself) but not a normal browser, so this adapter needs "playwright" for
+  # anything past the sitemap/robots.txt probes. Requires
+  # `pip install -e ".[render]"` and a one-time `playwright install chromium`.
+  fetch_mode: "http"
+
 politeness:
   # Requests per second against the target site. 0.5 = one request every 2s.
   requests_per_second: 0.5
