@@ -9,6 +9,24 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **CMS hospital organization adapter** (`adapters/organizations/cms_hospitals/`)
+  - the first concrete `OrganizationAdapter` (ROADMAP.md stage 3). Ingests
+  CMS's public "Hospital General Information" CSV - a manual bulk download,
+  not a live fetch (see the adapter's module docstring for why) - mapping its
+  real published columns (`Facility ID`, `Facility Name`, `Address`, ...)
+  onto `Organization` rows.
+  - `Database.upsert_organization()` dedupes on `(source, source_id)`,
+    mirroring `upsert_provider`'s approach without the change-log machinery
+    (organization fields aren't tracked field-by-field yet).
+  - New `providermap ingest-organizations [--org-adapter NAME] [--dry-run]`
+    CLI command; `--org-adapter cms_hospitals` is the default.
+  - New `providermap.parser_utils.normalize_org_name()`, reusable by any
+    future organization adapter.
+  - New `organizations.cms_hospitals_csv_path` config setting.
+  - `adapters/providers/adventhealth/` relocation (previously
+    `adapters/adventhealth/`) so the tree is symmetric with
+    `adapters/organizations/` - purely a Python import path move, no
+    behavior change (`AdventHealthAdapter.name` is still `"adventhealth"`).
 - **Organization architecture foundation** (schema v4) - the first step of
   growing ProviderMap into a provider → organization → location platform
   (see `ROADMAP.md`). Additive only, nothing scraped or imported yet:

@@ -114,6 +114,23 @@ class ExportsConfig:
 
 
 @dataclass
+class OrganizationsConfig:
+    """Settings for organization-side adapters (see ``adapters/organizations``).
+
+    Flat rather than nested per-adapter, matching every other single-purpose
+    config section here - add a second key when a second organization
+    adapter needs one.
+    """
+
+    # Path to a downloaded copy of CMS's "Hospital General Information" CSV
+    # (https://data.cms.gov/provider-data/dataset/xubh-q36u). Not fetched
+    # automatically - see adapters/organizations/cms_hospitals/adapter.py's
+    # module docstring for why this is a dataset the operator downloads, not
+    # a live endpoint the adapter calls.
+    cms_hospitals_csv_path: str = "data/cms_hospitals.csv"
+
+
+@dataclass
 class Config:
     """The full, typed configuration tree, mirroring ``config.yaml``."""
 
@@ -129,6 +146,7 @@ class Config:
     investigation: InvestigationConfig
     incremental: IncrementalConfig
     exports: ExportsConfig
+    organizations: OrganizationsConfig
 
 
 def load_config(path: str | Path = "config.yaml") -> Config:
@@ -159,6 +177,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         investigation=InvestigationConfig(**raw.get("investigation", {})),
         incremental=IncrementalConfig(**raw.get("incremental", {})),
         exports=ExportsConfig(**raw.get("exports", {})),
+        organizations=OrganizationsConfig(**raw.get("organizations", {})),
     )
     _apply_env_overrides(cfg)
     return cfg

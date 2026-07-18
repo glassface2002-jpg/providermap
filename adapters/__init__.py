@@ -7,17 +7,18 @@ adapter contract and registry:
   in :data:`ADAPTERS`. Add a health system by writing a subclass and
   registering it here; nothing in :mod:`providermap` changes.
 * **Organizations** - :class:`~adapters.organizations.base.OrganizationAdapter`,
-  registered in :data:`ORGANIZATION_ADAPTERS` (empty for now - the
-  organization ingestion side is foundation-only; see ``ROADMAP.md``).
+  registered in :data:`ORGANIZATION_ADAPTERS`. ``cms_hospitals`` is the first
+  concrete source; see ``ROADMAP.md`` for the staged plan it's part of.
 
 The two registries are intentionally parallel so the CLI and pipeline can
-treat "which adapter" uniformly once organization sources come online.
+treat "which adapter" uniformly.
 """
 
 from __future__ import annotations
 
 from .base import SiteAdapter
 from .organizations.base import OrganizationAdapter
+from .organizations.cms_hospitals.adapter import CMSHospitalsAdapter
 from .providers.adventhealth.adapter import AdventHealthAdapter
 
 # ---------------------------------------------------------------------- #
@@ -43,17 +44,18 @@ def get_adapter_class(name: str) -> type[SiteAdapter]:
 
 
 # ---------------------------------------------------------------------- #
-# Organization adapters (foundation - none registered yet)
+# Organization adapters
 # ---------------------------------------------------------------------- #
 
-ORGANIZATION_ADAPTERS: dict[str, type[OrganizationAdapter]] = {}
+ORGANIZATION_ADAPTERS: dict[str, type[OrganizationAdapter]] = {
+    CMSHospitalsAdapter.name: CMSHospitalsAdapter,
+}
 
 
 def get_organization_adapter_class(name: str) -> type[OrganizationAdapter]:
     """Look up a registered organization adapter class by name.
 
-    Mirrors :func:`get_adapter_class`. The registry is empty until the first
-    concrete organization source (e.g. ``cms_hospitals``) ships.
+    Mirrors :func:`get_adapter_class`.
     """
     try:
         return ORGANIZATION_ADAPTERS[name]

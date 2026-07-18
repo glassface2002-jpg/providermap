@@ -21,6 +21,11 @@ database/*.db-shm
 # Generated exports
 exports/output/
 
+# Manually-downloaded organization datasets (e.g. CMS Hospital General
+# Information) - large, third-party, and refreshed independently of this
+# repo. See organizations.cms_hospitals_csv_path in config.example.yaml.
+data/
+
 # Logs
 logs/*.log
 logs/investigation_report.md

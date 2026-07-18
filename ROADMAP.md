@@ -84,17 +84,18 @@ functionality is preserved and re-verified at every stage.
    `Organization` model, the three tables, the `OrganizationAdapter` contract
    and registry, and this document. No data is imported and nothing is
    scraped; the provider pipeline is untouched.
-2. **Provider-adapter relocation** *(recommended next)* — move the working
-   AdventHealth adapter to `adapters/providers/adventhealth/` so the tree is
-   symmetric (`adapters/providers/…`, `adapters/organizations/…`). Deferred
-   out of stage 1 deliberately: it is a provider-side move that isn't
-   required to add organizations, so it belongs in its own focused change
-   with its own test run.
-3. **CMS hospital organization adapter** — the first concrete
-   `OrganizationAdapter`, ingesting CMS's public hospital dataset into the
-   `organizations` table.
-4. **Hospital website enrichment** — discover and validate an organization's
-   official website (feeding `website` / `website_confidence`).
+2. **Provider-adapter relocation** *(done)* — moved the working AdventHealth
+   adapter to `adapters/providers/adventhealth/` so the tree is symmetric
+   (`adapters/providers/…`, `adapters/organizations/…`).
+3. **CMS hospital organization adapter** *(done)* — the first concrete
+   `OrganizationAdapter` (`adapters/organizations/cms_hospitals/`), mapping
+   CMS's public "Hospital General Information" CSV onto `Organization` rows.
+   `Database.upsert_organization()` dedupes on `(source, source_id)`; the
+   `providermap ingest-organizations` command runs it. The CSV is a manual
+   download (see the adapter's module docstring for why), not a live fetch.
+4. **Hospital website enrichment** *(recommended next)* — discover and
+   validate an organization's official website (feeding `website` /
+   `website_confidence`).
 5. **Provider ↔ organization linking** — populate `provider_organizations`,
    completing the provider → organization → location chain.
 
@@ -103,8 +104,8 @@ functionality is preserved and re-verified at every stage.
 ```
 adapters/
 ├── providers/
-│   └── adventhealth/        (relocated in stage 2)
+│   └── adventhealth/        relocated in stage 2 ✓
 └── organizations/
     ├── base.py              OrganizationAdapter contract  ✓
-    └── cms_hospitals/       (stage 3)
+    └── cms_hospitals/       first concrete adapter - stage 3 ✓
 ```

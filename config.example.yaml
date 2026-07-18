@@ -111,3 +111,12 @@ incremental:
 
 exports:
   dir: "exports/output"
+
+# ---------------------------------------------------------------------------
+# Organizations (hospitals, health systems, clinics) - see ROADMAP.md.
+# ---------------------------------------------------------------------------
+organizations:
+  # Path to a downloaded copy of CMS's "Hospital General Information" CSV
+  # (https://data.cms.gov/provider-data/dataset/xubh-q36u). Used by the
+  # `cms_hospitals` organization adapter; not fetched automatically.
+  cms_hospitals_csv_path: "data/cms_hospitals.csv"

@@ -65,6 +65,7 @@ from .models import (
     Confidence,
     ExcludedRecord,
     Location,
+    Organization,
     Provider,
     ProviderChange,
     ProviderType,
@@ -827,6 +828,93 @@ class Database:
             (provider_id, location_id, int(is_primary), rank),
         )
         self._commit()
+
+    # ------------------------------------------------------------------ #
+    # organizations
+    # ------------------------------------------------------------------ #
+
+    def upsert_organization(self, org: Organization) -> tuple[int | None, UpsertOutcome]:
+        """Insert or update one organization. Dedupes on ``(source, source_id)``
+        - the same ``UNIQUE`` constraint the schema enforces (see this
+        module's docstring), not application logic, so a crash mid-import
+        cannot produce a duplicate row.
+
+        Unlike :meth:`upsert_provider`, there is no content hash or change
+        log yet - organization fields aren't tracked field-by-field (see
+        ROADMAP.md); a re-import simply refreshes the row. Returns
+        ``(organization_id, outcome)``; the three outcomes mirror the
+        provider ones so call sites can tally both the same way.
+        """
+        existing = None
+        if org.source and org.source_id:
+            existing = self.conn.execute(
+                "SELECT * FROM organizations WHERE source=? AND source_id=?",
+                (org.source, org.source_id),
+            ).fetchone()
+
+        website_confidence = org.website_confidence.value if org.website_confidence else None
+
+        if existing is None:
+            cur = self.conn.execute(
+                "INSERT INTO organizations (name, normalized_name, organization_type, "
+                "address, city, state, zip, phone, website, website_confidence, "
+                "source, source_id, created_date, updated_date) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    org.name,
+                    org.normalized_name,
+                    org.organization_type,
+                    org.address,
+                    org.city,
+                    org.state,
+                    org.zip,
+                    org.phone,
+                    org.website,
+                    website_confidence,
+                    org.source,
+                    org.source_id,
+                    _now(),
+                    _now(),
+                ),
+            )
+            self._commit()
+            return cur.lastrowid, UpsertOutcome.NEW
+
+        oid: int = existing["organization_id"]
+        tracked_cols = (
+            "name",
+            "normalized_name",
+            "organization_type",
+            "address",
+            "city",
+            "state",
+            "zip",
+            "phone",
+        )
+        new_values = (
+            org.name,
+            org.normalized_name,
+            org.organization_type,
+            org.address,
+            org.city,
+            org.state,
+            org.zip,
+            org.phone,
+        )
+        if all(existing[c] == v for c, v in zip(tracked_cols, new_values, strict=True)):
+            self.conn.execute(
+                "UPDATE organizations SET updated_date=? WHERE organization_id=?", (_now(), oid)
+            )
+            self._commit()
+            return oid, UpsertOutcome.UNCHANGED
+
+        self.conn.execute(
+            "UPDATE organizations SET name=?, normalized_name=?, organization_type=?, "
+            "address=?, city=?, state=?, zip=?, phone=?, updated_date=? WHERE organization_id=?",
+            (*new_values, _now(), oid),
+        )
+        self._commit()
+        return oid, UpsertOutcome.CHANGED
 
     # ------------------------------------------------------------------ #
     # exclusions

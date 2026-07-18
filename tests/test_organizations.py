@@ -1,13 +1,12 @@
-"""Tests for the organization foundation (schema v4).
+"""Tests for the organization foundation (schema v4) and its first concrete
+adapter, ``cms_hospitals`` (ROADMAP.md stage 3).
 
-These cover only the *foundation* added in Phase 1 - the new tables, the
-Organization model, and the OrganizationAdapter contract. No concrete
-organization adapter exists yet, so there is no ingestion behaviour to test.
-
-The point of these tests is safety: prove the new schema is purely additive
+The schema/model/contract tests here prove the new schema is purely additive
 (an old provider database gains the org tables without losing a row) and that
-the new contract is wired correctly, so the existing provider suite staying
-green plus these passing means Phase 1 broke nothing.
+the adapter contract is wired correctly. ``Database.upsert_organization``
+tests below cover the ingestion path itself - adapter-specific behaviour
+(CSV column mapping, CMS's "Not Available" placeholder, ...) lives in
+``tests/test_cms_hospitals_adapter.py`` instead.
 """
 
 from __future__ import annotations
@@ -19,9 +18,10 @@ import pytest
 
 from adapters import ORGANIZATION_ADAPTERS, get_organization_adapter_class
 from adapters.organizations.base import OrganizationAdapter
+from adapters.organizations.cms_hospitals.adapter import CMSHospitalsAdapter
 from providermap.config import Config
 from providermap.database import Database
-from providermap.models import Organization
+from providermap.models import Organization, UpsertOutcome
 
 
 class TestOrganizationSchema:
@@ -165,7 +165,79 @@ class TestOrganizationAdapterContract:
         assert org.state == "AZ"
         assert org.source == "Manual Review"
 
-    def test_registry_exists_and_is_empty(self) -> None:
-        assert ORGANIZATION_ADAPTERS == {}
+    def test_registry_has_cms_hospitals_registered(self) -> None:
+        assert ORGANIZATION_ADAPTERS["cms_hospitals"] is CMSHospitalsAdapter
+        assert get_organization_adapter_class("cms_hospitals") is CMSHospitalsAdapter
+
+    def test_unknown_organization_adapter_raises(self) -> None:
         with pytest.raises(ValueError):
-            get_organization_adapter_class("cms_hospitals")
+            get_organization_adapter_class("not_a_real_adapter")
+
+
+class TestUpsertOrganization:
+    def test_first_import_is_new(self, db: Database) -> None:
+        org = Organization(
+            name="Banner Desert Medical Center",
+            normalized_name="banner desert medical center",
+            organization_type="hospital",
+            state="AZ",
+            source="CMS",
+            source_id="030001",
+        )
+        oid, outcome = db.upsert_organization(org)
+        assert oid is not None
+        assert outcome == UpsertOutcome.NEW
+        row = db.conn.execute(
+            "SELECT * FROM organizations WHERE organization_id=?", (oid,)
+        ).fetchone()
+        assert row["name"] == "Banner Desert Medical Center"
+        assert row["source_id"] == "030001"
+
+    def test_reimporting_identical_data_is_unchanged(self, db: Database) -> None:
+        org = Organization(
+            name="Banner Desert Medical Center",
+            normalized_name="banner desert medical center",
+            organization_type="hospital",
+            state="AZ",
+            source="CMS",
+            source_id="030001",
+        )
+        first_id, _ = db.upsert_organization(org)
+        second_id, outcome = db.upsert_organization(org)
+        assert second_id == first_id
+        assert outcome == UpsertOutcome.UNCHANGED
+        count = db.conn.execute("SELECT COUNT(*) FROM organizations").fetchone()[0]
+        assert count == 1
+
+    def test_reimporting_changed_data_updates_the_row(self, db: Database) -> None:
+        original = Organization(
+            name="Banner Desert Medical Center",
+            state="AZ",
+            phone=None,
+            source="CMS",
+            source_id="030001",
+        )
+        updated = Organization(
+            name="Banner Desert Medical Center",
+            state="AZ",
+            phone="(480) 412-3000",
+            source="CMS",
+            source_id="030001",
+        )
+        first_id, _ = db.upsert_organization(original)
+        second_id, outcome = db.upsert_organization(updated)
+        assert second_id == first_id
+        assert outcome == UpsertOutcome.CHANGED
+        row = db.conn.execute(
+            "SELECT phone FROM organizations WHERE organization_id=?", (first_id,)
+        ).fetchone()
+        assert row["phone"] == "(480) 412-3000"
+
+    def test_dedupes_on_source_and_source_id_not_name(self, db: Database) -> None:
+        """Two different real hospitals must never collapse into one row just
+        because a future adapter reuses a name - only (source, source_id)
+        identifies a row here."""
+        db.upsert_organization(Organization(name="Same Name Hospital", source="CMS", source_id="1"))
+        db.upsert_organization(Organization(name="Same Name Hospital", source="CMS", source_id="2"))
+        count = db.conn.execute("SELECT COUNT(*) FROM organizations").fetchone()[0]
+        assert count == 2

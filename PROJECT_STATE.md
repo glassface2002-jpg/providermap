@@ -7,12 +7,15 @@ file exists to answer "what actually works against the real site right now,
 and why," which the README's "Known limitations" section covers only
 partially.
 
-> **Organization support is foundation-only.** Schema v4 adds the
+> **Organization support: one concrete adapter shipped.** Schema v4 adds the
 > `organizations` / `provider_organizations` / `sources` tables and the
-> `OrganizationAdapter` contract, but no adapter populates them yet and
-> nothing organization-related is scraped or imported. Everything verified
-> below concerns the **provider** pipeline, which is unchanged. See
-> `ROADMAP.md` for the organization direction and its staged plan.
+> `OrganizationAdapter` contract. `cms_hospitals` (ROADMAP.md stage 3) is the
+> first adapter that actually populates `organizations`, via
+> `providermap ingest-organizations` reading a manually-downloaded CMS CSV -
+> see `adapters/organizations/cms_hospitals/adapter.py`'s module docstring.
+> `provider_organizations` is still unpopulated (stage 5, not built yet).
+> Everything else verified below concerns the **provider** pipeline, which is
+> unchanged. See `ROADMAP.md` for the full staged plan.
 
 ## AdventHealth access, verified
 

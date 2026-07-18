@@ -17,7 +17,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from adapters import ADAPTERS, SiteAdapter, get_adapter_class
+from adapters import (
+    ADAPTERS,
+    ORGANIZATION_ADAPTERS,
+    SiteAdapter,
+    get_adapter_class,
+    get_organization_adapter_class,
+)
 
 from . import discover as discovery
 from .config import Config, load_config
@@ -427,6 +433,42 @@ async def cmd_trial(config: Config, adapter: SiteAdapter, args: argparse.Namespa
     db.close()
 
 
+def cmd_ingest_organizations(config: Config, args: argparse.Namespace) -> None:
+    """Import one organization source's dataset into the ``organizations``
+    table - the counterpart to ``scrape`` for provider directories, but
+    dataset-shaped rather than website-shaped (see
+    ``adapters/organizations/base.py``). Nothing here touches ``providers``;
+    linking the two (``provider_organizations``) is a later stage - see
+    ROADMAP.md.
+    """
+    adapter_cls = get_organization_adapter_class(args.org_adapter)
+    org_adapter = adapter_cls(config)
+
+    db = Database(db_path(config, False), dry_run=args.dry_run)
+    tally = {"new": 0, "changed": 0, "unchanged": 0, "errors": 0}
+    log = logging.getLogger(__name__)
+
+    for raw in org_adapter.discover():
+        try:
+            org = org_adapter.normalize(org_adapter.extract(raw))
+            _, outcome = db.upsert_organization(org)
+            tally[outcome.value] = tally.get(outcome.value, 0) + 1
+        except Exception:
+            tally["errors"] += 1
+            log.exception("Failed to import one %s record", org_adapter.name)
+
+    banner = "DRY RUN - nothing was written" if args.dry_run else "Done"
+    print(f"\n{banner}. Source: {org_adapter.name} ({org_adapter.source})")
+    print(f"  new       : {tally['new']}")
+    print(f"  changed   : {tally['changed']}")
+    print(f"  unchanged : {tally['unchanged']}")
+    print(f"  errors    : {tally['errors']}")
+    if args.dry_run:
+        print(f"\n  {db.pending_writes} write operation(s) were rolled back.")
+    print()
+    db.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="providermap",
@@ -444,7 +486,10 @@ def build_parser() -> argparse.ArgumentParser:
             "    providermap refresh\n"
             "    providermap changes\n"
             "    providermap status\n"
-            '    providermap query "Menezes"\n'
+            '    providermap query "Menezes"\n\n'
+            "Organizations (see ROADMAP.md):\n"
+            "    providermap ingest-organizations --dry-run\n"
+            "    providermap ingest-organizations\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -507,6 +552,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     common(p, dry=False)
 
+    p = sub.add_parser(
+        "ingest-organizations", help="import one organization dataset (e.g. CMS hospitals)"
+    )
+    p.add_argument(
+        "--org-adapter",
+        default="cms_hospitals",
+        choices=sorted(ORGANIZATION_ADAPTERS),
+        help="which organization adapter to use (default: cms_hospitals)",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="do everything, write nothing (rolled back)"
+    )
+
     return ap
 
 
@@ -556,6 +614,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_changes(config, args)
     elif args.cmd == "query":
         cmd_query(config, args)
+    elif args.cmd == "ingest-organizations":
+        cmd_ingest_organizations(config, args)
 
 
 if __name__ == "__main__":

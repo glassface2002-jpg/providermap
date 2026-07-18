@@ -222,6 +222,23 @@ _ADDRESS_ABBREVIATIONS = {
 }
 
 
+def normalize_org_name(name: str | None) -> str | None:
+    """Build a stable matching key for an organization name.
+
+    Used by every :class:`~adapters.organizations.base.OrganizationAdapter`
+    to populate :attr:`~providermap.models.Organization.normalized_name`, so
+    the same real hospital reported by two different sources (e.g. "Banner
+    Desert Medical Center" vs "BANNER DESERT MED CTR") has a chance to match.
+    Conservative on purpose, matching :func:`normalize_address_key`'s
+    philosophy: whitespace and case only, no abbreviation guessing (an
+    organization's legal name is a worse target for that than a street
+    address is).
+    """
+    if not name:
+        return None
+    return re.sub(r"\s+", " ", name.strip().lower())
+
+
 def normalize_address_key(
     address: str | None,
     city: str | None,

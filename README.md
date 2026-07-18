@@ -38,6 +38,10 @@ code in it (see [Architecture](#architecture)).
   dataset exercises the entire pipeline with zero network access.
 - **Typed throughout** — dataclass models instead of untyped dicts, a clean
   mypy pass, Black + Ruff enforced in CI.
+- **Organizations** — a parallel `OrganizationAdapter` track ingests
+  hospitals/health systems from dataset sources (CMS's public hospital list
+  ships as the reference adapter) into a `provider → organization → location`
+  model. See [ROADMAP.md](ROADMAP.md) for the staged plan.
 
 ---
 
@@ -184,6 +188,10 @@ providermap export                  # write the three .xlsx files
 providermap status                  # progress + recent run history
 providermap changes                 # what moved since the last run
 providermap query "Menezes"         # provider -> primary site of care
+
+# Organizations (see ROADMAP.md) - independent of the above, no --adapter needed
+providermap ingest-organizations --dry-run   # rehearsal - nothing written
+providermap ingest-organizations             # import CMS hospitals into `organizations`
 ```
 
 Re-running is always safe: `scrape` skips anything already marked `done`,
@@ -448,8 +456,9 @@ providermap/
 │   │   └── adventhealth/       reference provider adapter
 │   │       ├── adapter.py
 │   │       └── fixtures.py     offline test dataset + fetcher
-│   └── organizations/        organization adapters (foundation - see ROADMAP.md)
-│       └── base.py             OrganizationAdapter interface
+│   └── organizations/        organization adapters (see ROADMAP.md)
+│       ├── base.py             OrganizationAdapter interface
+│       └── cms_hospitals/      first concrete adapter (CMS hospital dataset)
 ├── tests/                   pytest suite, fully offline
 ├── database/  logs/  exports/output/    (gitignored - generated at runtime)
 ├── config.example.yaml
