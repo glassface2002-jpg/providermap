@@ -41,8 +41,9 @@ code in it (see [Architecture](#architecture)).
 - **Organizations** — a parallel `OrganizationAdapter` track ingests
   hospitals/health systems from dataset sources (CMS's public hospital list
   ships as the reference adapter) into a `provider → organization → location`
-  model, plus best-effort website discovery (never presented as
-  authoritative - see [ROADMAP.md](ROADMAP.md) for the staged plan).
+  model, with best-effort website discovery (never presented as
+  authoritative) and exact-name provider ↔ organization linking (never
+  fuzzy). See [ROADMAP.md](ROADMAP.md) for the completed staged plan.
 
 ---
 
@@ -195,6 +196,8 @@ providermap ingest-organizations --dry-run   # rehearsal - nothing written
 providermap ingest-organizations             # import CMS hospitals into `organizations`
 providermap enrich-organizations --dry-run   # best-effort website discovery, rehearsal
 providermap enrich-organizations             # same, for real (never marks results "high confidence")
+providermap link-organizations --dry-run     # link providers to organizations, rehearsal
+providermap link-organizations               # same, for real (exact name match only, never fuzzy)
 ```
 
 Re-running is always safe: `scrape` skips anything already marked `done`,
@@ -453,7 +456,8 @@ providermap/
 │   ├── discover.py                    site analysis / investigation
 │   ├── parser_utils.py                 generic parsing (NPI checksum, vCard,
 │   │                                     JSON-LD, ...)
-│   └── website_enrichment.py            best-effort org website discovery
+│   ├── website_enrichment.py            best-effort org website discovery
+│   └── organization_linking.py           exact-match provider<->org linking
 ├── adapters/
 │   ├── base.py               SiteAdapter interface (provider directories)
 │   ├── providers/            provider adapters

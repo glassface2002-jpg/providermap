@@ -9,6 +9,21 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Provider ↔ organization linking** (`providermap/organization_linking.py`,
+  ROADMAP.md stage 5 - completes the organization staged plan). Populates
+  `provider_organizations`, matching a provider's `hospital_affiliation`
+  (preferred) or `practice_name` against `organizations.normalized_name` -
+  **exact match only, deliberately never fuzzy**: unlike website enrichment's
+  low-confidence guess, a wrong organizational link corrupts the answer to
+  this project's actual purpose (where a provider practices), so an
+  unmatched provider is left unlinked rather than guessed at.
+  - `Database.link_provider_organization()` - idempotent via the existing
+    `UNIQUE(provider_id, organization_id)` constraint.
+  - `Database.providers_for_organization_linking()` - only providers with a
+    practice_name/hospital_affiliation signal, not already linked, so
+    re-running is cheap.
+  - New `providermap link-organizations [--limit N] [--dry-run]` CLI
+    command - pure local database work, no network access.
 - **Best-effort hospital website enrichment** (`providermap/website_enrichment.py`,
   ROADMAP.md stage 4). Given only an organization's name, generates candidate
   domains (progressively stripping trailing generic words like "Medical

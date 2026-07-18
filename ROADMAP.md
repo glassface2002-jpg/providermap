@@ -103,9 +103,23 @@ functionality is preserved and re-verified at every stage.
    `Database.set_organization_website()` is a method deliberately separate
    from `upsert_organization()`, so a later CMS re-import (which has no
    website field) can never silently erase a discovered one.
-5. **Provider ↔ organization linking** *(recommended next)* — populate
-   `provider_organizations`, completing the provider → organization →
-   location chain.
+5. **Provider ↔ organization linking** *(done — completes this staged plan)* —
+   `providermap/organization_linking.py` populates `provider_organizations`,
+   completing the provider → organization → location chain, via
+   `providermap link-organizations`. Matching is **exact normalized-name
+   only, deliberately never fuzzy**: unlike stage 4's website guess, a wrong
+   link here corrupts the answer to the actual question this project
+   exists to answer (*where does this provider actually practice?*), so a
+   provider with no exact match is left unlinked rather than guessed at.
+   `Database.link_provider_organization()` relies on the existing
+   `UNIQUE(provider_id, organization_id)` constraint for idempotent dedupe.
+
+All five stages above are now shipped. What's *not* yet covered - and would
+be natural follow-on work, not part of this plan - includes a second
+organization adapter (CMS's dataset only covers hospitals, not clinics or
+medical groups), fuzzy/probabilistic linking with human review for the cases
+exact-match deliberately leaves unlinked, and exporting the organization side
+of the data (`exporter.py` still only writes provider workbooks).
 
 ## Target structure
 
@@ -116,4 +130,8 @@ adapters/
 └── organizations/
     ├── base.py              OrganizationAdapter contract  ✓
     └── cms_hospitals/       first concrete adapter - stage 3 ✓
+
+providermap/
+├── website_enrichment.py    best-effort website discovery - stage 4 ✓
+└── organization_linking.py  exact-match provider<->org linking - stage 5 ✓
 ```

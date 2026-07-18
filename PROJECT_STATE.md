@@ -7,21 +7,27 @@ file exists to answer "what actually works against the real site right now,
 and why," which the README's "Known limitations" section covers only
 partially.
 
-> **Organization support: ingestion + website discovery shipped, linking not
-> yet.** Schema v4 adds the `organizations` / `provider_organizations` /
-> `sources` tables and the `OrganizationAdapter` contract. `cms_hospitals`
-> (stage 3) populates `organizations` via
-> `providermap ingest-organizations` reading a manually-downloaded CMS CSV -
-> see `adapters/organizations/cms_hospitals/adapter.py`'s module docstring.
+> **Organization support: all five ROADMAP.md stages shipped.** Schema v4
+> adds the `organizations` / `provider_organizations` / `sources` tables and
+> the `OrganizationAdapter` contract. `cms_hospitals` (stage 3) populates
+> `organizations` via `providermap ingest-organizations` reading a
+> manually-downloaded CMS CSV - see
+> `adapters/organizations/cms_hospitals/adapter.py`'s module docstring.
 > `providermap enrich-organizations` (stage 4) then makes a best-effort guess
 > at each organization's website - genuinely a **guess**, never
 > authoritative (there is no free, reliable name→domain API, and real health
 > systems' domains often don't match their facilities' legal names), so
 > results are only ever `Confidence.LOW`/`MEDIUM`, never `HIGH` - see
-> `providermap/website_enrichment.py`'s module docstring. `provider_organizations`
-> is still unpopulated (stage 5, not built yet). Everything else verified
-> below concerns the **provider** pipeline, which is unchanged. See
-> `ROADMAP.md` for the full staged plan.
+> `providermap/website_enrichment.py`'s module docstring. `providermap
+> link-organizations` (stage 5) then populates `provider_organizations` by
+> **exact normalized-name match only, never fuzzy** - a wrong link here would
+> corrupt the answer to this project's actual purpose, so an unmatched
+> provider is left unlinked rather than guessed at; see
+> `providermap/organization_linking.py`. Everything else verified below
+> concerns the **provider** pipeline, which is unchanged throughout. See
+> `ROADMAP.md` for the full staged plan and what's deliberately still out of
+> scope (a second organization adapter, human-reviewed fuzzy linking,
+> organization exports).
 
 ## AdventHealth access, verified
 

@@ -21,7 +21,7 @@ from adapters.organizations.base import OrganizationAdapter
 from adapters.organizations.cms_hospitals.adapter import CMSHospitalsAdapter
 from providermap.config import Config
 from providermap.database import Database
-from providermap.models import Confidence, Organization, UpsertOutcome
+from providermap.models import Confidence, Organization, Provider, UpsertOutcome
 
 
 class TestOrganizationSchema:
@@ -311,3 +311,67 @@ class TestOrganizationWebsiteEnrichment:
             )
         missing = db.organizations_missing_website(limit=2)
         assert len(missing) == 2
+
+
+class TestProviderOrganizationLinking:
+    """`link_provider_organization`, `providers_for_organization_linking`,
+    and `organizations_by_normalized_name` (ROADMAP.md stage 5)."""
+
+    def test_link_creates_a_row_and_is_idempotent(self, db: Database) -> None:
+        pid, _ = db.upsert_provider(Provider(full_name="Dr. Smith", npi="1194013169"))
+        oid, _ = db.upsert_organization(
+            Organization(
+                name="Banner Desert Medical Center",
+                normalized_name="banner desert medical center",
+                source="CMS",
+                source_id="1",
+            )
+        )
+        assert pid is not None and oid is not None
+
+        created_first = db.link_provider_organization(pid, oid, source="name_match")
+        created_second = db.link_provider_organization(pid, oid, source="name_match")
+        assert created_first is True
+        assert created_second is False  # already linked - UNIQUE constraint no-ops
+
+        count = db.conn.execute("SELECT COUNT(*) FROM provider_organizations").fetchone()[0]
+        assert count == 1
+
+    def test_organizations_by_normalized_name_keys_correctly(self, db: Database) -> None:
+        db.upsert_organization(
+            Organization(
+                name="Banner Desert Medical Center",
+                normalized_name="banner desert medical center",
+                source="CMS",
+                source_id="1",
+            )
+        )
+        by_name = db.organizations_by_normalized_name()
+        assert "banner desert medical center" in by_name
+        assert by_name["banner desert medical center"].name == "Banner Desert Medical Center"
+
+    def test_providers_for_organization_linking_excludes_already_linked(self, db: Database) -> None:
+        pid1, _ = db.upsert_provider(
+            Provider(full_name="Dr. A", npi="1194013169", practice_name="Some Hospital")
+        )
+        pid2, _ = db.upsert_provider(
+            Provider(full_name="Dr. B", npi="1215930367", practice_name="Some Hospital")
+        )
+        oid, _ = db.upsert_organization(
+            Organization(name="Some Hospital", source="CMS", source_id="1")
+        )
+        assert pid1 is not None and pid2 is not None and oid is not None
+        db.link_provider_organization(pid1, oid, source="name_match")
+
+        candidates = db.providers_for_organization_linking()
+        assert pid1 not in [p.provider_id for p in candidates]
+        assert pid2 in [p.provider_id for p in candidates]
+
+    def test_providers_for_organization_linking_excludes_providers_with_no_org_signal(
+        self, db: Database
+    ) -> None:
+        db.upsert_provider(
+            Provider(full_name="Dr. No Practice Info", npi="1710588744")
+        )  # no practice_name or hospital_affiliation
+        candidates = db.providers_for_organization_linking()
+        assert candidates == []

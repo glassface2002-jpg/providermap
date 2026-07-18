@@ -505,6 +505,42 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     db.close()
 
 
+def cmd_link_organizations(config: Config, args: argparse.Namespace) -> None:
+    """Link providers to organizations by exact name match - see
+    ``providermap/organization_linking.py`` for why this never fuzzy-matches.
+    Pure local database work, no network access.
+    """
+    from .organization_linking import best_match_for_provider
+
+    db = Database(db_path(config, False), dry_run=args.dry_run)
+    orgs_by_name = db.organizations_by_normalized_name()
+    providers = db.providers_for_organization_linking(limit=args.limit)
+
+    linked = 0
+    for provider in providers:
+        org = best_match_for_provider(
+            provider.hospital_affiliation, provider.practice_name, orgs_by_name
+        )
+        if (
+            org is not None
+            and provider.provider_id is not None
+            and org.organization_id is not None
+            and db.link_provider_organization(
+                provider.provider_id, org.organization_id, source="name_match"
+            )
+        ):
+            linked += 1
+
+    banner = "DRY RUN - nothing was written" if args.dry_run else "Done"
+    print(f"\n{banner}.")
+    print(f"  providers checked : {len(providers)}")
+    print(f"  links created     : {linked}")
+    if args.dry_run:
+        print(f"\n  {db.pending_writes} write operation(s) were rolled back.")
+    print()
+    db.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="providermap",
@@ -527,6 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
             "    providermap ingest-organizations --dry-run\n"
             "    providermap ingest-organizations\n"
             "    providermap enrich-organizations   # best-effort website discovery\n"
+            "    providermap link-organizations     # link providers to organizations\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -611,6 +648,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="do everything, write nothing (rolled back)"
     )
 
+    p = sub.add_parser(
+        "link-organizations",
+        help="link providers to organizations by exact name match",
+    )
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument(
+        "--dry-run", action="store_true", help="do everything, write nothing (rolled back)"
+    )
+
     return ap
 
 
@@ -669,6 +715,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_ingest_organizations(config, args)
     elif args.cmd == "enrich-organizations":
         asyncio.run(cmd_enrich_organizations(config, args))
+    elif args.cmd == "link-organizations":
+        cmd_link_organizations(config, args)
 
 
 if __name__ == "__main__":

@@ -970,6 +970,56 @@ class Database:
         rows = self.conn.execute(sql, params).fetchall()
         return [_row_to_organization(r) for r in rows]
 
+    def link_provider_organization(
+        self, provider_id: int, organization_id: int, source: str
+    ) -> bool:
+        """Link a provider to an organization. Idempotent - relies on the
+        ``UNIQUE(provider_id, organization_id)`` constraint for dedupe, the
+        same pattern :meth:`link` uses for ``provider_locations``. Returns
+        ``True`` if a new link row was created, ``False`` if it already
+        existed (``INSERT OR IGNORE`` silently no-ops on the constraint).
+        """
+        cur = self.conn.execute(
+            "INSERT OR IGNORE INTO provider_organizations "
+            "(provider_id, organization_id, source, is_active) VALUES (?, ?, ?, 1)",
+            (provider_id, organization_id, source),
+        )
+        self._commit()
+        return cur.rowcount > 0
+
+    def providers_for_organization_linking(self, limit: int | None = None) -> list[Provider]:
+        """Active providers with a ``practice_name`` or
+        ``hospital_affiliation`` to match against, not yet linked to any
+        organization - the input set for ``providermap link-organizations``.
+        Excluding already-linked providers keeps re-running the command
+        cheap and idempotent rather than re-checking everyone every time.
+        """
+        sql = (
+            "SELECT * FROM providers WHERE is_active = 1 "
+            "AND (practice_name IS NOT NULL OR hospital_affiliation IS NOT NULL) "
+            "AND provider_id NOT IN (SELECT provider_id FROM provider_organizations) "
+            "ORDER BY provider_id"
+        )
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+        rows = self.conn.execute(sql, params).fetchall()
+        return [_row_to_provider(r) for r in rows]
+
+    def organizations_by_normalized_name(self) -> dict[str, Organization]:
+        """Every organization keyed by ``normalized_name``, for exact-match
+        linking (see ``providermap/organization_linking.py``). Last-one-wins
+        on a duplicate normalized name - two real organizations sharing one
+        is rare, and exact-name matching alone can't disambiguate them
+        anyway; that's a case for a future, more specific adapter, not a
+        guess here.
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM organizations WHERE normalized_name IS NOT NULL"
+        ).fetchall()
+        return {r["normalized_name"]: _row_to_organization(r) for r in rows}
+
     # ------------------------------------------------------------------ #
     # exclusions
     # ------------------------------------------------------------------ #
