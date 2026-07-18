@@ -21,7 +21,7 @@ from adapters.organizations.base import OrganizationAdapter
 from adapters.organizations.cms_hospitals.adapter import CMSHospitalsAdapter
 from providermap.config import Config
 from providermap.database import Database
-from providermap.models import Organization, UpsertOutcome
+from providermap.models import Confidence, Organization, UpsertOutcome
 
 
 class TestOrganizationSchema:
@@ -241,3 +241,73 @@ class TestUpsertOrganization:
         db.upsert_organization(Organization(name="Same Name Hospital", source="CMS", source_id="2"))
         count = db.conn.execute("SELECT COUNT(*) FROM organizations").fetchone()[0]
         assert count == 2
+
+
+class TestOrganizationWebsiteEnrichment:
+    """`set_organization_website` and `organizations_missing_website`
+    (ROADMAP.md stage 4)."""
+
+    def test_set_organization_website_stores_url_and_confidence(self, db: Database) -> None:
+        oid, _ = db.upsert_organization(
+            Organization(name="Banner Desert Medical Center", source="CMS", source_id="1")
+        )
+        assert oid is not None
+        db.set_organization_website(oid, "https://bannerhealth.com", Confidence.MEDIUM)
+        row = db.conn.execute(
+            "SELECT website, website_confidence FROM organizations WHERE organization_id=?",
+            (oid,),
+        ).fetchone()
+        assert row["website"] == "https://bannerhealth.com"
+        assert row["website_confidence"] == "medium"
+
+    def test_reimporting_via_upsert_never_clears_a_discovered_website(self, db: Database) -> None:
+        """Regression test: `upsert_organization`'s UPDATE must never touch
+        website/website_confidence, since a re-import from an adapter with
+        no website field (every adapter today) would otherwise silently
+        erase whatever `enrich-organizations` previously found."""
+        org = Organization(
+            name="Banner Desert Medical Center", phone=None, source="CMS", source_id="1"
+        )
+        oid, _ = db.upsert_organization(org)
+        assert oid is not None
+        db.set_organization_website(oid, "https://bannerhealth.com", Confidence.MEDIUM)
+
+        # Re-import with a changed field (forces the CHANGED branch, not the
+        # cheaper UNCHANGED touch-only branch) to prove even a real update
+        # doesn't disturb the website columns.
+        updated = Organization(
+            name="Banner Desert Medical Center",
+            phone="(480) 412-3000",
+            source="CMS",
+            source_id="1",
+        )
+        db.upsert_organization(updated)
+
+        row = db.conn.execute(
+            "SELECT website, website_confidence, phone FROM organizations WHERE organization_id=?",
+            (oid,),
+        ).fetchone()
+        assert row["phone"] == "(480) 412-3000"  # the re-import's change did apply
+        assert row["website"] == "https://bannerhealth.com"  # but website survived
+        assert row["website_confidence"] == "medium"
+
+    def test_organizations_missing_website_excludes_ones_that_have_one(self, db: Database) -> None:
+        oid1, _ = db.upsert_organization(
+            Organization(name="Has A Website", source="CMS", source_id="1")
+        )
+        oid2, _ = db.upsert_organization(
+            Organization(name="No Website Yet", source="CMS", source_id="2")
+        )
+        assert oid1 is not None
+        db.set_organization_website(oid1, "https://example.com", Confidence.LOW)
+
+        missing = db.organizations_missing_website()
+        assert [o.organization_id for o in missing] == [oid2]
+
+    def test_organizations_missing_website_respects_limit(self, db: Database) -> None:
+        for i in range(3):
+            db.upsert_organization(
+                Organization(name=f"Hospital {i}", source="CMS", source_id=str(i))
+            )
+        missing = db.organizations_missing_website(limit=2)
+        assert len(missing) == 2

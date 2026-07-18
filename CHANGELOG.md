@@ -9,6 +9,23 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Best-effort hospital website enrichment** (`providermap/website_enrichment.py`,
+  ROADMAP.md stage 4). Given only an organization's name, generates candidate
+  domains (progressively stripping trailing generic words like "Medical
+  Center") and verifies each actually resolves before reporting it - never
+  presented as authoritative:
+  - `Confidence.HIGH` is never returned - only `LOW` (domain resolves, no
+    name match) or `MEDIUM` (the organization's name appears on the page).
+  - `Database.set_organization_website()` - deliberately separate from
+    `upsert_organization()` so a later CMS re-import (no website field)
+    can never silently erase a previously-discovered website.
+  - New `providermap enrich-organizations [--limit N] [--dry-run]` CLI
+    command; makes live requests to arbitrary candidate domains, so (unlike
+    `ingest-organizations`) it requires a real contact email configured,
+    same as the provider-scraping commands.
+  - Network access is injected as a callable so the candidate-generation and
+    confidence-scoring logic is fully unit-testable offline; only
+    `http_domain_checker()` (the real implementation) touches the network.
 - **CMS hospital organization adapter** (`adapters/organizations/cms_hospitals/`)
   - the first concrete `OrganizationAdapter` (ROADMAP.md stage 3). Ingests
   CMS's public "Hospital General Information" CSV - a manual bulk download,

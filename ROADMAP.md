@@ -93,11 +93,19 @@ functionality is preserved and re-verified at every stage.
    `Database.upsert_organization()` dedupes on `(source, source_id)`; the
    `providermap ingest-organizations` command runs it. The CSV is a manual
    download (see the adapter's module docstring for why), not a live fetch.
-4. **Hospital website enrichment** *(recommended next)* — discover and
-   validate an organization's official website (feeding `website` /
-   `website_confidence`).
-5. **Provider ↔ organization linking** — populate `provider_organizations`,
-   completing the provider → organization → location chain.
+4. **Hospital website enrichment** *(done)* — `providermap/website_enrichment.py`
+   discovers a candidate website from an organization's name and verifies it
+   actually resolves before recording it, via `providermap enrich-organizations`.
+   There is no free, reliable API for this, and a real health system's
+   website frequently doesn't match the facility's legal name at all, so
+   this is explicitly a **guess, never authoritative**: results are only
+   ever `Confidence.LOW` or `Confidence.MEDIUM`, never `HIGH`.
+   `Database.set_organization_website()` is a method deliberately separate
+   from `upsert_organization()`, so a later CMS re-import (which has no
+   website field) can never silently erase a discovered one.
+5. **Provider ↔ organization linking** *(recommended next)* — populate
+   `provider_organizations`, completing the provider → organization →
+   location chain.
 
 ## Target structure
 

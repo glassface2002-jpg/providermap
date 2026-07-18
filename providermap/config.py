@@ -129,6 +129,14 @@ class OrganizationsConfig:
     # a live endpoint the adapter calls.
     cms_hospitals_csv_path: str = "data/cms_hospitals.csv"
 
+    # Used by `providermap enrich-organizations` (see
+    # providermap/website_enrichment.py) - a handful of existence-check
+    # requests per organization, spread across unrelated domains, so a
+    # separate conservative budget rather than reusing `politeness.*`
+    # (which is tuned for one site's directory, not many unrelated ones).
+    website_enrichment_requests_per_second: float = 1.0
+    website_enrichment_timeout_seconds: float = 8.0
+
 
 @dataclass
 class Config:

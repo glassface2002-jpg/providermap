@@ -420,6 +420,28 @@ def _row_to_provider(row: sqlite3.Row) -> Provider:
     )
 
 
+def _row_to_organization(row: sqlite3.Row) -> Organization:
+    return Organization(
+        organization_id=row["organization_id"],
+        name=row["name"],
+        normalized_name=row["normalized_name"],
+        organization_type=row["organization_type"],
+        address=row["address"],
+        city=row["city"],
+        state=row["state"],
+        zip=row["zip"],
+        phone=row["phone"],
+        website=row["website"],
+        website_confidence=(
+            Confidence(row["website_confidence"]) if row["website_confidence"] else None
+        ),
+        source=row["source"],
+        source_id=row["source_id"],
+        created_date=row["created_date"],
+        updated_date=row["updated_date"],
+    )
+
+
 class Database:
     def __init__(self, path: str | Path, dry_run: bool = False):
         self.path = Path(path)
@@ -915,6 +937,38 @@ class Database:
         )
         self._commit()
         return oid, UpsertOutcome.CHANGED
+
+    def set_organization_website(
+        self, organization_id: int, website: str, confidence: Confidence
+    ) -> None:
+        """Record a discovered website for an existing organization.
+
+        Deliberately a separate method from :meth:`upsert_organization`
+        rather than folded into its UPDATE: that method's SET clause is
+        driven by an ingestion adapter's fields (name, address, ...), none
+        of which currently include a website. If website/website_confidence
+        were part of that UPDATE, a later re-import from an adapter with no
+        website field (e.g. ``cms_hospitals``) would pass ``None`` for both
+        and silently null out whatever this method previously found. This
+        method only ever touches these two columns.
+        """
+        self.conn.execute(
+            "UPDATE organizations SET website=?, website_confidence=?, updated_date=? "
+            "WHERE organization_id=?",
+            (website, confidence.value, _now(), organization_id),
+        )
+        self._commit()
+
+    def organizations_missing_website(self, limit: int | None = None) -> list[Organization]:
+        """Organizations with no website yet - the input set for
+        ``providermap enrich-organizations``."""
+        sql = "SELECT * FROM organizations WHERE website IS NULL ORDER BY organization_id"
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+        rows = self.conn.execute(sql, params).fetchall()
+        return [_row_to_organization(r) for r in rows]
 
     # ------------------------------------------------------------------ #
     # exclusions

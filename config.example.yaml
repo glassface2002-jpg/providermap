@@ -120,3 +120,10 @@ organizations:
   # (https://data.cms.gov/provider-data/dataset/xubh-q36u). Used by the
   # `cms_hospitals` organization adapter; not fetched automatically.
   cms_hospitals_csv_path: "data/cms_hospitals.csv"
+
+  # `providermap enrich-organizations` - best-effort website discovery (see
+  # providermap/website_enrichment.py for why this is a guess, never
+  # authoritative). Requests spread across many unrelated domains, so this
+  # is its own conservative budget, separate from `politeness.*`.
+  website_enrichment_requests_per_second: 1.0
+  website_enrichment_timeout_seconds: 8.0

@@ -469,6 +469,42 @@ def cmd_ingest_organizations(config: Config, args: argparse.Namespace) -> None:
     db.close()
 
 
+async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> None:
+    """Best-effort website discovery for organizations that don't have one
+    yet - see ``providermap/website_enrichment.py`` for why this is a guess,
+    never authoritative, and never ``Confidence.HIGH``.
+    """
+    from .website_enrichment import discover_website, http_domain_checker
+
+    db = Database(db_path(config, False), dry_run=args.dry_run)
+    orgs = db.organizations_missing_website(limit=args.limit)
+
+    async def checker(url: str) -> str | None:
+        return await http_domain_checker(
+            url,
+            config.politeness.user_agent,
+            config.organizations.website_enrichment_timeout_seconds,
+        )
+
+    found = 0
+    for org in orgs:
+        url, confidence = await discover_website(
+            org, checker, config.organizations.website_enrichment_requests_per_second
+        )
+        if url and confidence is not None and org.organization_id is not None:
+            db.set_organization_website(org.organization_id, url, confidence)
+            found += 1
+
+    banner = "DRY RUN - nothing was written" if args.dry_run else "Done"
+    print(f"\n{banner}.")
+    print(f"  organizations checked : {len(orgs)}")
+    print(f"  websites found        : {found}")
+    if args.dry_run:
+        print(f"\n  {db.pending_writes} write operation(s) were rolled back.")
+    print()
+    db.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="providermap",
@@ -490,6 +526,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Organizations (see ROADMAP.md):\n"
             "    providermap ingest-organizations --dry-run\n"
             "    providermap ingest-organizations\n"
+            "    providermap enrich-organizations   # best-effort website discovery\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -565,6 +602,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="do everything, write nothing (rolled back)"
     )
 
+    p = sub.add_parser(
+        "enrich-organizations",
+        help="best-effort website discovery for organizations missing one",
+    )
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument(
+        "--dry-run", action="store_true", help="do everything, write nothing (rolled back)"
+    )
+
     return ap
 
 
@@ -588,9 +634,14 @@ def main(argv: list[str] | None = None) -> None:
     setup_logging(config)
     adapter = make_adapter(config, args.adapter)
 
-    live = args.cmd in {"investigate", "discover", "scrape", "refresh", "trial"} and not getattr(
-        args, "test", False
-    )
+    live = args.cmd in {
+        "investigate",
+        "discover",
+        "scrape",
+        "refresh",
+        "trial",
+        "enrich-organizations",
+    } and not getattr(args, "test", False)
     if live:
         check_user_agent(config)
 
@@ -616,6 +667,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_query(config, args)
     elif args.cmd == "ingest-organizations":
         cmd_ingest_organizations(config, args)
+    elif args.cmd == "enrich-organizations":
+        asyncio.run(cmd_enrich_organizations(config, args))
 
 
 if __name__ == "__main__":
