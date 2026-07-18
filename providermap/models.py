@@ -223,6 +223,42 @@ TRACKED_FIELDS: tuple[str, ...] = (
 
 
 @dataclass
+class Organization:
+    """One healthcare organization - a hospital, health system, clinic,
+    medical group, or facility.
+
+    The foundation for the ``provider -> organization -> location`` model
+    ProviderMap is growing into: an :class:`Organization` is the "where"
+    that sits between a :class:`Provider` and a physical :class:`Location`
+    (e.g. Dr. Smith -> Banner Desert Medical Center -> Mesa, AZ). Mirrors the
+    ``organizations`` table.
+
+    Not yet populated by any adapter - the organization ingestion side is
+    scaffolding at this stage; see ``ROADMAP.md``. Field names follow the
+    same convention as :class:`Provider` (``organization_id``,
+    ``created_date``/``updated_date``) rather than a second style.
+    """
+
+    name: str | None = None
+    normalized_name: str | None = None  # lowercased/stripped, for dedupe + matching
+    organization_type: str | None = None  # "hospital" | "health_system" | "clinic" | ...
+    address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    zip: str | None = None
+    phone: str | None = None
+    website: str | None = None
+    website_confidence: Confidence | None = None  # trust in a discovered website
+    source: str | None = None  # which adapter/dataset this came from (see `sources` table)
+    source_id: str | None = None  # that source's own id for this org, if any
+
+    # Read-only bookkeeping populated by the database layer on read.
+    organization_id: int | None = None
+    created_date: str | None = None
+    updated_date: str | None = None
+
+
+@dataclass
 class Location:
     """A unique care location, deduplicated by normalized address."""
 

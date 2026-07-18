@@ -9,6 +9,20 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Organization architecture foundation** (schema v4) - the first step of
+  growing ProviderMap into a provider → organization → location platform
+  (see `ROADMAP.md`). Additive only, nothing scraped or imported yet:
+  - `Organization` dataclass in `providermap/models.py`.
+  - Three new tables via `CREATE TABLE IF NOT EXISTS` (safe on existing
+    databases): `organizations`, `provider_organizations`, and a seeded
+    `sources` provenance lookup. `SCHEMA_VERSION` 3 → 4.
+  - `adapters.organizations.base.OrganizationAdapter` contract
+    (`discover` / `extract` / `normalize`) + a parallel
+    `ORGANIZATION_ADAPTERS` registry. Empty until the first concrete source
+    ships.
+  - The provider pipeline, the AdventHealth adapter, and every existing test
+    are untouched; `tests/test_organizations.py` verifies the new schema is
+    additive and the v3 → v4 migration loses no provider data.
 - **Optional Playwright-rendered fetch backend** (`providermap/render.py`,
   `site.fetch_mode: "playwright"`, `pip install -e ".[render]"`) for sites
   whose bot-management blocks plain HTTP clients. Implements the same

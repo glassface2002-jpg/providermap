@@ -75,7 +75,7 @@ from .models import (
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -199,6 +199,66 @@ CREATE TABLE IF NOT EXISTS provider_changes (
 CREATE TABLE IF NOT EXISTS run_stats (
     key TEXT PRIMARY KEY, value TEXT
 );
+
+-- ------------------------------------------------------------------------ --
+-- Organization foundation (schema v4).
+--
+-- These three tables lay the groundwork for the provider -> organization ->
+-- location model (see ROADMAP.md). They are ADDITIVE: created here via
+-- `CREATE TABLE IF NOT EXISTS` (which runs before _migrate on every open, on
+-- both fresh and existing databases), touch nothing in `providers`, and are
+-- not yet written to by any adapter. An old v3 database simply gains three
+-- empty tables on its next open; no provider data is affected.
+-- ------------------------------------------------------------------------ --
+
+-- Hospitals, health systems, clinics, medical groups, facilities.
+CREATE TABLE IF NOT EXISTS organizations (
+    organization_id    INTEGER PRIMARY KEY,
+    name               TEXT,
+    normalized_name    TEXT,
+    organization_type  TEXT,
+    address            TEXT,
+    city               TEXT,
+    state              TEXT,
+    zip                TEXT,
+    phone              TEXT,
+    website            TEXT,
+    website_confidence TEXT,
+    source             TEXT,
+    source_id          TEXT,
+    created_date       DATETIME,
+    updated_date       DATETIME,
+
+    -- Dedupe key: one row per (source, source_id). NULLs compare distinct in
+    -- SQLite, so manually-entered orgs with no source_id are never collapsed.
+    UNIQUE(source, source_id)
+);
+
+-- Many-to-many link between providers and the organizations they practise at.
+CREATE TABLE IF NOT EXISTS provider_organizations (
+    id               INTEGER PRIMARY KEY,
+    provider_id      INTEGER REFERENCES providers(provider_id) ON DELETE CASCADE,
+    organization_id  INTEGER REFERENCES organizations(organization_id) ON DELETE CASCADE,
+    relationship     TEXT,      -- e.g. "employed" | "affiliated"; future use
+    source           TEXT,
+    is_active        INTEGER DEFAULT 1,
+    UNIQUE(provider_id, organization_id)
+);
+
+-- Provenance: where a piece of information originated. Seeded idempotently
+-- below so the concept is queryable from day one; adapters register their own.
+CREATE TABLE IF NOT EXISTS sources (
+    id            INTEGER PRIMARY KEY,
+    name          TEXT UNIQUE,
+    description   TEXT,
+    created_date  DATETIME
+);
+
+INSERT OR IGNORE INTO sources (name, description) VALUES
+    ('NPPES',         'CMS National Plan & Provider Enumeration System'),
+    ('CMS',           'Centers for Medicare & Medicaid Services datasets'),
+    ('AdventHealth',  'AdventHealth provider directory (reference adapter)'),
+    ('Manual Review', 'Human-entered or human-corrected data');
 """
 
 # Applied AFTER _migrate(), never inside SCHEMA - see module docstring.
@@ -212,6 +272,13 @@ CREATE INDEX IF NOT EXISTS idx_scrape_log_status   ON scrape_log(status);
 CREATE INDEX IF NOT EXISTS idx_scrape_log_fetched  ON scrape_log(last_fetched);
 CREATE INDEX IF NOT EXISTS idx_changes_provider    ON provider_changes(provider_id);
 CREATE INDEX IF NOT EXISTS idx_changes_run         ON provider_changes(run_id);
+
+-- Organization foundation (schema v4).
+CREATE INDEX IF NOT EXISTS idx_orgs_normalized_name ON organizations(normalized_name);
+CREATE INDEX IF NOT EXISTS idx_orgs_state           ON organizations(state);
+CREATE INDEX IF NOT EXISTS idx_orgs_source          ON organizations(source);
+CREATE INDEX IF NOT EXISTS idx_prov_orgs_provider   ON provider_organizations(provider_id);
+CREATE INDEX IF NOT EXISTS idx_prov_orgs_org        ON provider_organizations(organization_id);
 """
 
 WRITE_COLS: tuple[str, ...] = (

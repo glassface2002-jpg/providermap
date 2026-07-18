@@ -442,14 +442,17 @@ providermap/
 │   └── parser_utils.py                 generic parsing (NPI checksum, vCard,
 │                                         JSON-LD, ...)
 ├── adapters/
-│   ├── base.py               SiteAdapter interface
-│   └── adventhealth/         reference adapter
-│       ├── adapter.py
-│       └── fixtures.py       offline test dataset + fetcher
-├── tests/                   pytest suite (100 tests, fully offline)
+│   ├── base.py               SiteAdapter interface (provider directories)
+│   ├── adventhealth/         reference provider adapter
+│   │   ├── adapter.py
+│   │   └── fixtures.py       offline test dataset + fetcher
+│   └── organizations/        organization adapters (foundation - see ROADMAP.md)
+│       └── base.py             OrganizationAdapter interface
+├── tests/                   pytest suite, fully offline
 ├── database/  logs/  exports/output/    (gitignored - generated at runtime)
 ├── config.example.yaml
 ├── PROJECT_STATE.md         what's actually verified working against the live site, and why
+├── ROADMAP.md               the provider -> organization -> location platform direction
 ├── pyproject.toml           Black / Ruff / mypy / pytest configuration
 ├── Dockerfile  docker-compose.yml
 ├── .github/workflows/ci.yml
