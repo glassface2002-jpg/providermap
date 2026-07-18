@@ -1,8 +1,8 @@
-"""Tests for adapters.adventhealth.adapter - URL recognition and parsing."""
+"""Tests for adapters.providers.adventhealth.adapter - URL recognition and parsing."""
 
 from __future__ import annotations
 
-from adapters.adventhealth.adapter import AdventHealthAdapter
+from adapters.providers.adventhealth.adapter import AdventHealthAdapter
 
 
 class TestProfileUrlRecognition:

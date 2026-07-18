@@ -46,7 +46,7 @@ def compute_backoff(
 
 class AsyncFetcher(Protocol):
     """Structural interface shared by :class:`Fetcher` and the offline test
-    fetcher (``adapters.adventhealth.fixtures.OfflineFetcher``).
+    fetcher (``adapters.providers.adventhealth.fixtures.OfflineFetcher``).
 
     Lets call sites - the CLI, the pipeline, source discovery - be typed
     against "something that fetches URLs" without importing test-only

@@ -16,9 +16,9 @@ treat "which adapter" uniformly once organization sources come online.
 
 from __future__ import annotations
 
-from .adventhealth.adapter import AdventHealthAdapter
 from .base import SiteAdapter
 from .organizations.base import OrganizationAdapter
+from .providers.adventhealth.adapter import AdventHealthAdapter
 
 # ---------------------------------------------------------------------- #
 # Provider directory adapters

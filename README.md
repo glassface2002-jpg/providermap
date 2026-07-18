@@ -212,7 +212,8 @@ the database current without a full re-crawl.
    │                        │          │  views_ajax/html       │
    │  ┌──────────────────┐ │           │  providermap/sources.py│
    │  │ AdventHealthAdapter│ │          └─────────────────────┘
-   │  │ adapters/adventhealth│
+   │  │ adapters/providers/  │
+   │  │   adventhealth        │
    │  └──────────────────┘ │
    └─────────────────────┘
               │
@@ -234,7 +235,7 @@ the database current without a full re-crawl.
 
 **The pipeline (`providermap/`) contains zero AdventHealth-specific code.**
 Everything site-specific — URL patterns, which endpoints exist, HTML
-structure, brand-name keyword lists — lives in `adapters/adventhealth/`
+structure, brand-name keyword lists — lives in `adapters/providers/adventhealth/`
 behind the `SiteAdapter` interface. A second health system means writing a
 second adapter; nothing under `providermap/` changes. See `adapters/base.py`
 for the exact contract and `CONTRIBUTING.md` for a walkthrough of adding one.
@@ -443,9 +444,10 @@ providermap/
 │                                         JSON-LD, ...)
 ├── adapters/
 │   ├── base.py               SiteAdapter interface (provider directories)
-│   ├── adventhealth/         reference provider adapter
-│   │   ├── adapter.py
-│   │   └── fixtures.py       offline test dataset + fetcher
+│   ├── providers/            provider adapters
+│   │   └── adventhealth/       reference provider adapter
+│   │       ├── adapter.py
+│   │       └── fixtures.py     offline test dataset + fetcher
 │   └── organizations/        organization adapters (foundation - see ROADMAP.md)
 │       └── base.py             OrganizationAdapter interface
 ├── tests/                   pytest suite, fully offline

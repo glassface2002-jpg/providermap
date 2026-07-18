@@ -87,12 +87,12 @@ zero benefit here.
 
 `providermap/parser_utils.parse_jsonld_physician()` extracts a schema.org
 `Physician`-shaped JSON-LD node from a page, if present; `adapters/
-adventhealth/adapter.py`'s `parse_profile_html()` tries it before falling
+providers/adventhealth/adapter.py`'s `parse_profile_html()` tries it before falling
 back to the existing `og:title`/`<title>` HTML scraping. Maps onto six new
 `ProfilePage`/`Provider` fields: `hospital_affiliation`,
 `accepting_new_patients`, `rating`, `rating_count`, `languages`,
 `insurance_accepted`. Fully implemented and tested against the offline
-fixture (`adapters/adventhealth/fixtures.py` carries full/partial/malformed
+fixture (`adapters/providers/adventhealth/fixtures.py` carries full/partial/malformed
 JSON-LD variants), but **currently unreachable against live AdventHealth
 data** for the reason above - the profile page it would read from is
 blocked. It will start working automatically, no code changes needed, if

@@ -7,7 +7,7 @@ an organization's name looks like on that platform - is isolated behind this
 one interface. Supporting a new health system means writing a new
 :class:`SiteAdapter` subclass; nothing in ``providermap/`` changes.
 
-See ``adapters/adventhealth/adapter.py`` for a complete implementation, and
+See ``adapters/providers/adventhealth/adapter.py`` for a complete implementation, and
 its module docstring for the reverse-engineering notes that motivated each
 method.
 """

@@ -11,8 +11,8 @@ import pytest
 # matching how run.py locates them.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from adapters.adventhealth.adapter import AdventHealthAdapter  # noqa: E402
-from adapters.adventhealth.fixtures import DATASET  # noqa: E402
+from adapters.providers.adventhealth.adapter import AdventHealthAdapter  # noqa: E402
+from adapters.providers.adventhealth.fixtures import DATASET  # noqa: E402
 from providermap.config import Config, load_config  # noqa: E402
 from providermap.database import Database  # noqa: E402
 

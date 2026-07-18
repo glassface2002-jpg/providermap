@@ -89,10 +89,11 @@ ignore = [
 "tests/*" = ["B011"]  # pytest.raises(...) patterns bugbear sometimes flags
 
 # --------------------------------------------------------------------------
-# mypy - type checking. `adapters/adventhealth/fixtures.py` is intentionally
-# loosely typed (it models heterogeneous raw site data - see its docstring),
-# so it's excluded from strict checks rather than fighting the checker on
-# code whose entire point is to be loosely structured test data.
+# mypy - type checking. `adapters/providers/adventhealth/fixtures.py` is
+# intentionally loosely typed (it models heterogeneous raw site data - see
+# its docstring), so it's excluded from strict checks rather than fighting
+# the checker on code whose entire point is to be loosely structured test
+# data.
 # --------------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.10"
@@ -101,7 +102,7 @@ warn_unused_configs = true
 no_implicit_optional = true
 check_untyped_defs = true
 disallow_untyped_defs = false  # aspirational; not yet enforced project-wide
-exclude = ["adapters/adventhealth/fixtures\\.py", "tests/"]
+exclude = ["adapters/providers/adventhealth/fixtures\\.py", "tests/"]
 
 [[tool.mypy.overrides]]
 module = ["selectolax.*", "openpyxl.*", "playwright.*"]

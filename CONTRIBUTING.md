@@ -35,7 +35,7 @@ pytest -v                       # verbose
 ```
 
 The suite is fully offline (see `tests/conftest.py` and
-`adapters/adventhealth/fixtures.py`) - it never makes a network request, so
+`adapters/providers/adventhealth/fixtures.py`) - it never makes a network request, so
 there's no reason a test should be flaky or slow. If you write a test that
 does either, that's a bug in the test.
 
@@ -74,8 +74,8 @@ Supporting a second health system's provider directory should never require
 touching `providermap/` - if it does, that's a bug in the framework, please
 file it as such rather than working around it in your adapter.
 
-1. Create `adapters/<yoursite>/adapter.py` implementing
-   `adapters.base.SiteAdapter`. Read `adapters/adventhealth/adapter.py`
+1. Create `adapters/providers/<yoursite>/adapter.py` implementing
+   `adapters.base.SiteAdapter`. Read `adapters/providers/adventhealth/adapter.py`
    first - its docstring explains what was reverse-engineered and why each
    method exists.
 2. Register it in `adapters/__init__.py`'s `ADAPTERS` dict.
@@ -83,8 +83,8 @@ file it as such rather than working around it in your adapter.
    (or equivalent) parsing, and HTML parsing - see
    `tests/test_adventhealth_adapter.py` for the shape these take.
 4. If your site has enough quirks to be worth a full offline pipeline test
-   (most will), add `adapters/<yoursite>/fixtures.py` following the pattern
-   in `adapters/adventhealth/fixtures.py` - deliberately adversarial test
+   (most will), add `adapters/providers/<yoursite>/fixtures.py` following the pattern
+   in `adapters/providers/adventhealth/fixtures.py` - deliberately adversarial test
    data, not just happy-path records.
 5. Ship a `config.example.yaml`-equivalent `site:` block documenting your
    site's `base_url`, `listing_path`, and `vcard_path` (or note that your

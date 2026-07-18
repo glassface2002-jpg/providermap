@@ -81,7 +81,7 @@ provider-directory ingestion pipeline.
 - **Adapter framework** (`adapters/base.py`) - site-specific knowledge (URL
   shapes, HTML structure, available endpoints) is isolated behind a
   `SiteAdapter` interface. AdventHealth ships as the reference adapter
-  (`adapters/adventhealth/`).
+  (`adapters/providers/adventhealth/`).
 - **Source discovery**, cheapest-first: XML sitemap → Drupal JSON:API →
   Drupal views AJAX → HTML listing scrape. Auto-probed on each run, or
   pinned via `site.force_source` in config.

@@ -87,7 +87,7 @@ def make_fetcher(config: Config, cache: Cache, test_mode: bool, adapter_name: st
                 f"--test mode is only implemented for the adventhealth "
                 f"adapter's fixtures, got '{adapter_name}'"
             )
-        from adapters.adventhealth.fixtures import OfflineFetcher
+        from adapters.providers.adventhealth.fixtures import OfflineFetcher
 
         return OfflineFetcher(config, cache)
     return Fetcher(config, cache)
@@ -300,7 +300,7 @@ def cmd_query(config: Config, args: argparse.Namespace) -> None:
 
 
 async def cmd_test(config: Config, adapter: SiteAdapter, args: argparse.Namespace) -> None:
-    from adapters.adventhealth.fixtures import DATASET, EXPECTED
+    from adapters.providers.adventhealth.fixtures import DATASET, EXPECTED
 
     path = db_path(config, True)
     if path.exists() and not args.keep:

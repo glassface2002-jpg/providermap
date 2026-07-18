@@ -469,7 +469,7 @@ def build_dataset() -> dict[str, Any]:
     # A few already-existing physician records also carry schema.org JSON-LD
     # on their profile page, to exercise the JSON-LD-primary/HTML-fallback
     # path (see providermap.parser_utils.parse_jsonld_physician and
-    # adapters.adventhealth.adapter._apply_jsonld). Attached here rather than
+    # adapters.providers.adventhealth.adapter._apply_jsonld). Attached here rather than
     # via new records, so EXPECTED's fixed counts are unaffected.
     records[0].jsonld = json.dumps(
         {

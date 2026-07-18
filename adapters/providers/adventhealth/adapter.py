@@ -32,7 +32,7 @@ from providermap.models import ProfilePage, VCardData
 from providermap.parser_utils import parse_jsonld_physician
 from providermap.parser_utils import parse_vcard as _parse_vcard
 
-from ..base import SiteAdapter
+from ...base import SiteAdapter
 
 _PROFILE_URL_RE = re.compile(
     r"^(?:https?://[^/]+)?"

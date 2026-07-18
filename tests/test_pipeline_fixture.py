@@ -4,7 +4,7 @@ This is the automated equivalent of ``providermap test`` on the command
 line: it runs discovery, NPPES lookup, classification, validation, dedupe,
 and storage against the 100-record fixture with zero network access, and
 checks the result against known-correct expectations. Every edge case listed
-in ``adapters/adventhealth/fixtures.py``'s module docstring is exercised here.
+in ``adapters/providers/adventhealth/fixtures.py``'s module docstring is exercised here.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ import asyncio
 
 import pytest
 
-from adapters.adventhealth.adapter import AdventHealthAdapter
-from adapters.adventhealth.fixtures import DATASET, EXPECTED, OfflineFetcher
+from adapters.providers.adventhealth.adapter import AdventHealthAdapter
+from adapters.providers.adventhealth.fixtures import DATASET, EXPECTED, OfflineFetcher
 from providermap.config import Config
 from providermap.database import Database
 from providermap.net import Cache
