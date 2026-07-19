@@ -38,12 +38,13 @@ code in it (see [Architecture](#architecture)).
   dataset exercises the entire pipeline with zero network access.
 - **Typed throughout** — dataclass models instead of untyped dicts, a clean
   mypy pass, Black + Ruff enforced in CI.
-- **Organizations** — a parallel `OrganizationAdapter` track ingests
-  hospitals/health systems from dataset sources (CMS's public hospital list
-  ships as the reference adapter) into a `provider → organization → location`
-  model, with best-effort website discovery (never presented as
-  authoritative) and exact-name provider ↔ organization linking (never
-  fuzzy). See [ROADMAP.md](ROADMAP.md) for the completed staged plan.
+- **Organizations** — a parallel `OrganizationAdapter` track auto-fetches
+  CMS's public hospital dataset (no manual download) into a
+  `provider → organization → location` model, enriches websites from
+  Wikidata's verified data first (falling back to a labeled best-effort
+  guess only where Wikidata has nothing), and links providers to
+  organizations by exact name match (never fuzzy). See
+  [ROADMAP.md](ROADMAP.md) for the completed staged plan.
 
 ---
 
@@ -193,9 +194,9 @@ providermap query "Menezes"         # provider -> primary site of care
 
 # Organizations (see ROADMAP.md) - independent of the above, no --adapter needed
 providermap ingest-organizations --dry-run   # rehearsal - nothing written
-providermap ingest-organizations             # import CMS hospitals into `organizations`
-providermap enrich-organizations --dry-run   # best-effort website discovery, rehearsal
-providermap enrich-organizations             # same, for real (never marks results "high confidence")
+providermap ingest-organizations             # auto-fetches CMS's current dataset, no upload needed
+providermap enrich-organizations --dry-run   # website discovery, rehearsal
+providermap enrich-organizations             # Wikidata (verified) first, guess as fallback
 providermap link-organizations --dry-run     # link providers to organizations, rehearsal
 providermap link-organizations               # same, for real (exact name match only, never fuzzy)
 ```
@@ -457,6 +458,8 @@ providermap/
 │   ├── parser_utils.py                 generic parsing (NPI checksum, vCard,
 │   │                                     JSON-LD, ...)
 │   ├── website_enrichment.py            best-effort org website discovery
+│   │                                     (fallback, see wikidata_hospitals.py)
+│   ├── wikidata_hospitals.py             bulk verified hospital website lookup
 │   └── organization_linking.py           exact-match provider<->org linking
 ├── adapters/
 │   ├── base.py               SiteAdapter interface (provider directories)

@@ -470,14 +470,26 @@ def cmd_ingest_organizations(config: Config, args: argparse.Namespace) -> None:
 
 
 async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> None:
-    """Best-effort website discovery for organizations that don't have one
-    yet - see ``providermap/website_enrichment.py`` for why this is a guess,
-    never authoritative, and never ``Confidence.HIGH``.
+    """Website discovery for organizations that don't have one yet.
+
+    Tries Wikidata's verified hospital website data first (one bulk query -
+    see ``providermap/wikidata_hospitals.py`` - a match there is genuinely
+    confirmed data, reported as ``Confidence.HIGH``), then falls back to a
+    best-effort name-guess (``providermap/website_enrichment.py`` - never
+    authoritative, never ``Confidence.HIGH``) for organizations Wikidata
+    doesn't cover.
     """
+    from .models import Confidence
+    from .parser_utils import normalize_org_name
     from .website_enrichment import discover_website, http_domain_checker
+    from .wikidata_hospitals import fetch_wikidata_hospital_websites
 
     db = Database(db_path(config, False), dry_run=args.dry_run)
     orgs = db.organizations_missing_website(limit=args.limit)
+
+    wikidata_sites = fetch_wikidata_hospital_websites(
+        config.politeness.user_agent, config.organizations.wikidata_fetch_timeout_seconds
+    )
 
     async def checker(url: str) -> str | None:
         return await http_domain_checker(
@@ -486,19 +498,31 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
             config.organizations.website_enrichment_timeout_seconds,
         )
 
-    found = 0
+    found_wikidata = 0
+    found_guess = 0
     for org in orgs:
+        if org.organization_id is None:
+            continue
+
+        key = org.normalized_name or normalize_org_name(org.name)
+        wiki_url = wikidata_sites.get(key) if key else None
+        if wiki_url:
+            db.set_organization_website(org.organization_id, wiki_url, Confidence.HIGH)
+            found_wikidata += 1
+            continue
+
         url, confidence = await discover_website(
             org, checker, config.organizations.website_enrichment_requests_per_second
         )
-        if url and confidence is not None and org.organization_id is not None:
+        if url and confidence is not None:
             db.set_organization_website(org.organization_id, url, confidence)
-            found += 1
+            found_guess += 1
 
     banner = "DRY RUN - nothing was written" if args.dry_run else "Done"
     print(f"\n{banner}.")
     print(f"  organizations checked : {len(orgs)}")
-    print(f"  websites found        : {found}")
+    print(f"  found via wikidata    : {found_wikidata}")
+    print(f"  found via guessing    : {found_guess}")
     if args.dry_run:
         print(f"\n  {db.pending_writes} write operation(s) were rolled back.")
     print()

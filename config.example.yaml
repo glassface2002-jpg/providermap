@@ -116,14 +116,20 @@ exports:
 # Organizations (hospitals, health systems, clinics) - see ROADMAP.md.
 # ---------------------------------------------------------------------------
 organizations:
-  # Path to a downloaded copy of CMS's "Hospital General Information" CSV
-  # (https://data.cms.gov/provider-data/dataset/xubh-q36u). Used by the
-  # `cms_hospitals` organization adapter; not fetched automatically.
-  cms_hospitals_csv_path: "data/cms_hospitals.csv"
+  # null (default): `cms_hospitals` auto-fetches CMS's current "Hospital
+  # General Information" dataset itself on every `ingest-organizations` run,
+  # via CMS's metastore API - no manual download. Set to a path to pin a
+  # local copy instead.
+  cms_hospitals_csv_path: null
+  cms_hospitals_fetch_timeout_seconds: 30.0
 
-  # `providermap enrich-organizations` - best-effort website discovery (see
-  # providermap/website_enrichment.py for why this is a guess, never
-  # authoritative). Requests spread across many unrelated domains, so this
-  # is its own conservative budget, separate from `politeness.*`.
+  # `providermap enrich-organizations` tries Wikidata's verified hospital
+  # website data first (one bulk query - see
+  # providermap/wikidata_hospitals.py), then falls back to a best-effort
+  # name-guess for hospitals Wikidata doesn't cover (see
+  # providermap/website_enrichment.py for why that fallback is a guess,
+  # never authoritative). Requests spread across many unrelated domains, so
+  # this is its own conservative budget, separate from `politeness.*`.
+  wikidata_fetch_timeout_seconds: 60.0
   website_enrichment_requests_per_second: 1.0
   website_enrichment_timeout_seconds: 8.0

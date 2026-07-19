@@ -122,12 +122,14 @@ class OrganizationsConfig:
     adapter needs one.
     """
 
-    # Path to a downloaded copy of CMS's "Hospital General Information" CSV
-    # (https://data.cms.gov/provider-data/dataset/xubh-q36u). Not fetched
-    # automatically - see adapters/organizations/cms_hospitals/adapter.py's
-    # module docstring for why this is a dataset the operator downloads, not
-    # a live endpoint the adapter calls.
-    cms_hospitals_csv_path: str = "data/cms_hospitals.csv"
+    # `None` (the default): auto-fetch CMS's "Hospital General Information"
+    # dataset on every `providermap ingest-organizations` run, via CMS's
+    # metastore API (see adapters/organizations/cms_hospitals/adapter.py's
+    # module docstring) - always the current file, no manual download step.
+    # Set to a path to pin a local copy instead (a fixed archived version,
+    # or offline testing).
+    cms_hospitals_csv_path: str | None = None
+    cms_hospitals_fetch_timeout_seconds: float = 30.0
 
     # Used by `providermap enrich-organizations` (see
     # providermap/website_enrichment.py) - a handful of existence-check
@@ -136,6 +138,12 @@ class OrganizationsConfig:
     # (which is tuned for one site's directory, not many unrelated ones).
     website_enrichment_requests_per_second: float = 1.0
     website_enrichment_timeout_seconds: float = 8.0
+
+    # `providermap enrich-organizations` queries Wikidata's public SPARQL
+    # endpoint once per run (see providermap/wikidata_hospitals.py) before
+    # falling back to guessing - a longer timeout since it's a single,
+    # heavier bulk query rather than many small ones.
+    wikidata_fetch_timeout_seconds: float = 60.0
 
 
 @dataclass

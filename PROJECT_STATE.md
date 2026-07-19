@@ -7,27 +7,30 @@ file exists to answer "what actually works against the real site right now,
 and why," which the README's "Known limitations" section covers only
 partially.
 
-> **Organization support: all five ROADMAP.md stages shipped.** Schema v4
-> adds the `organizations` / `provider_organizations` / `sources` tables and
-> the `OrganizationAdapter` contract. `cms_hospitals` (stage 3) populates
-> `organizations` via `providermap ingest-organizations` reading a
-> manually-downloaded CMS CSV - see
-> `adapters/organizations/cms_hospitals/adapter.py`'s module docstring.
-> `providermap enrich-organizations` (stage 4) then makes a best-effort guess
-> at each organization's website - genuinely a **guess**, never
-> authoritative (there is no free, reliable name→domain API, and real health
-> systems' domains often don't match their facilities' legal names), so
-> results are only ever `Confidence.LOW`/`MEDIUM`, never `HIGH` - see
-> `providermap/website_enrichment.py`'s module docstring. `providermap
-> link-organizations` (stage 5) then populates `provider_organizations` by
-> **exact normalized-name match only, never fuzzy** - a wrong link here would
-> corrupt the answer to this project's actual purpose, so an unmatched
-> provider is left unlinked rather than guessed at; see
-> `providermap/organization_linking.py`. Everything else verified below
-> concerns the **provider** pipeline, which is unchanged throughout. See
-> `ROADMAP.md` for the full staged plan and what's deliberately still out of
-> scope (a second organization adapter, human-reviewed fuzzy linking,
-> organization exports).
+> **Organization support: all five ROADMAP.md stages shipped, plus two
+> follow-on improvements.** Schema v4 adds the `organizations` /
+> `provider_organizations` / `sources` tables and the `OrganizationAdapter`
+> contract. `cms_hospitals` (stage 3) populates `organizations` via
+> `providermap ingest-organizations`, which **auto-fetches CMS's current
+> dataset itself** (via CMS's metastore API, keyed by the dataset's
+> permanent identifier `xubh-q36u`) - no manual download required; setting
+> `organizations.cms_hospitals_csv_path` still allows pinning a local file
+> instead. `providermap enrich-organizations` (stage 4 + follow-on) tries
+> **Wikidata's verified hospital website data first** (one bulk SPARQL
+> query, ~2,800 of ~4,400 tagged US hospitals covered - a genuine match is
+> `Confidence.HIGH`, since the website itself is verified, not guessed - see
+> `providermap/wikidata_hospitals.py`), then falls back to a best-effort
+> name-guess (`providermap/website_enrichment.py` - genuinely a **guess**,
+> never authoritative, results only ever `Confidence.LOW`/`MEDIUM`) for
+> whatever Wikidata doesn't cover. `providermap link-organizations` (stage 5)
+> then populates `provider_organizations` by **exact normalized-name match
+> only, never fuzzy** - a wrong link here would corrupt the answer to this
+> project's actual purpose, so an unmatched provider is left unlinked rather
+> than guessed at; see `providermap/organization_linking.py`. Everything
+> else verified below concerns the **provider** pipeline, which is unchanged
+> throughout. See `ROADMAP.md` for the full staged plan and what's
+> deliberately still out of scope (a second organization adapter,
+> human-reviewed fuzzy linking, organization exports).
 
 ## AdventHealth access, verified
 

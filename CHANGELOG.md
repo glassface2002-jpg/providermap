@@ -9,6 +9,28 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **CMS auto-fetch + Wikidata-backed website discovery** (ROADMAP.md
+  follow-on work). Two changes to remove manual steps from the organization
+  pipeline:
+  - `cms_hospitals` now auto-fetches the current CMS dataset itself by
+    default (`organizations.cms_hospitals_csv_path: null`) via CMS's
+    metastore API, keyed by the dataset's permanent identifier
+    (`xubh-q36u`) rather than a hardcoded download URL, which changes every
+    time CMS republishes the file. Setting the config value to a path still
+    works, for a pinned copy or offline testing.
+  - New `providermap/wikidata_hospitals.py`: one bulk SPARQL query fetches
+    every US hospital Wikidata has a community-verified official website
+    for (~2,800 of ~4,400 tagged). `enrich-organizations` tries this first
+    - a genuine match is reported as `Confidence.HIGH`, since the website
+    itself is verified data, not a guess - and only falls back to the
+    existing domain-guessing heuristic for organizations Wikidata doesn't
+    cover.
+  - Fixed a real bug caught while verifying the live CMS schema: the
+    adapter was reading a `"Phone Number"` column that doesn't exist in the
+    actual dataset (it's `"Telephone Number"`) - every phone number would
+    have silently come back `None` against real data. Only ever exercised
+    against this project's own synthetic test fixtures before, which shared
+    the same wrong assumption.
 - **Provider ↔ organization linking** (`providermap/organization_linking.py`,
   ROADMAP.md stage 5 - completes the organization staged plan). Populates
   `provider_organizations`, matching a provider's `hospital_affiliation`

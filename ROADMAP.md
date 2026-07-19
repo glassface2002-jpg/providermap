@@ -89,17 +89,30 @@ functionality is preserved and re-verified at every stage.
    (`adapters/providers/…`, `adapters/organizations/…`).
 3. **CMS hospital organization adapter** *(done)* — the first concrete
    `OrganizationAdapter` (`adapters/organizations/cms_hospitals/`), mapping
-   CMS's public "Hospital General Information" CSV onto `Organization` rows.
-   `Database.upsert_organization()` dedupes on `(source, source_id)`; the
-   `providermap ingest-organizations` command runs it. The CSV is a manual
-   download (see the adapter's module docstring for why), not a live fetch.
-4. **Hospital website enrichment** *(done)* — `providermap/website_enrichment.py`
-   discovers a candidate website from an organization's name and verifies it
-   actually resolves before recording it, via `providermap enrich-organizations`.
-   There is no free, reliable API for this, and a real health system's
-   website frequently doesn't match the facility's legal name at all, so
-   this is explicitly a **guess, never authoritative**: results are only
-   ever `Confidence.LOW` or `Confidence.MEDIUM`, never `HIGH`.
+   CMS's public "Hospital General Information" CSV (5,400+ US hospitals) onto
+   `Organization` rows. `Database.upsert_organization()` dedupes on
+   `(source, source_id)`; `providermap ingest-organizations` runs it.
+   **Auto-fetches by default**: the adapter queries CMS's metastore API
+   (keyed by the dataset's permanent identifier, `xubh-q36u`) for the
+   *current* download URL on every run, so it's always the latest file with
+   no manual download step. Setting `organizations.cms_hospitals_csv_path`
+   overrides this with a local file instead (a pinned copy, or offline
+   testing).
+4. **Hospital website enrichment** *(done)* — `providermap enrich-organizations`
+   tries two sources, in order:
+   1. **Wikidata** (`providermap/wikidata_hospitals.py`) — one bulk SPARQL
+      query for every US hospital with a community-verified official
+      website (~2,800 of Wikidata's ~4,400 tagged US hospitals have one).
+      A match here is genuinely confirmed data, not a guess, so it's
+      recorded as `Confidence.HIGH` - the only place that label is used in
+      the organization pipeline.
+   2. **Name-guessing** (`providermap/website_enrichment.py`), as a fallback
+      for whatever Wikidata doesn't cover. There is no free, reliable API
+      for this case, and a real health system's website frequently doesn't
+      match the facility's legal name at all, so this path is explicitly a
+      **guess, never authoritative**: results are only ever `Confidence.LOW`
+      or `Confidence.MEDIUM`.
+
    `Database.set_organization_website()` is a method deliberately separate
    from `upsert_organization()`, so a later CMS re-import (which has no
    website field) can never silently erase a discovered one.

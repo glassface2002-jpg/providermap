@@ -24,7 +24,7 @@ ROWS: list[dict[str, Any]] = [
         "City/Town": "Mesa",
         "State": "AZ",
         "ZIP Code": "85202",
-        "Phone Number": "(480) 412-3000",
+        "Telephone Number": "(480) 412-3000",
     },
     {
         "Facility ID": "030002",
@@ -33,7 +33,7 @@ ROWS: list[dict[str, Any]] = [
         "City/Town": "Chandler",
         "State": "AZ",
         "ZIP Code": "85224",
-        "Phone Number": "Not Available",
+        "Telephone Number": "Not Available",
     },
     {
         "Facility ID": "030003",
@@ -42,7 +42,7 @@ ROWS: list[dict[str, Any]] = [
         "City/Town": "Mesa",
         "State": "AZ",
         "ZIP Code": "",
-        "Phone Number": "(480) 555-0100",
+        "Telephone Number": "(480) 555-0100",
     },
 ]
 
