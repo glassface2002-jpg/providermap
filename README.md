@@ -197,6 +197,7 @@ providermap ingest-organizations --dry-run   # rehearsal - nothing written
 providermap ingest-organizations             # auto-fetches CMS's current dataset, no upload needed
 providermap enrich-organizations --dry-run   # website discovery, rehearsal
 providermap enrich-organizations             # Wikidata (verified) first, guess as fallback
+providermap enrich-organizations --older-than 0  # force re-check, even recently-failed lookups
 providermap link-organizations --dry-run     # link providers to organizations, rehearsal
 providermap link-organizations               # same, for real (exact name match only, never fuzzy)
 ```

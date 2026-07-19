@@ -484,8 +484,13 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     from .website_enrichment import discover_website, http_domain_checker
     from .wikidata_hospitals import fetch_wikidata_hospital_websites
 
+    older_than = (
+        args.older_than
+        if args.older_than is not None
+        else config.organizations.website_recheck_after_days
+    )
     db = Database(db_path(config, False), dry_run=args.dry_run)
-    orgs = db.organizations_missing_website(limit=args.limit)
+    orgs = db.organizations_missing_website(limit=args.limit, retry_after_days=older_than)
 
     wikidata_sites = fetch_wikidata_hospital_websites(
         config.politeness.user_agent, config.organizations.wikidata_fetch_timeout_seconds
@@ -517,6 +522,8 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
         if url and confidence is not None:
             db.set_organization_website(org.organization_id, url, confidence)
             found_guess += 1
+        else:
+            db.mark_website_checked(org.organization_id)
 
     banner = "DRY RUN - nothing was written" if args.dry_run else "Done"
     print(f"\n{banner}.")
@@ -668,6 +675,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="best-effort website discovery for organizations missing one",
     )
     p.add_argument("--limit", type=int, default=None)
+    p.add_argument(
+        "--older-than",
+        type=int,
+        default=None,
+        metavar="DAYS",
+        help="re-check organizations last checked >DAYS ago (default: config value; 0 = always recheck)",
+    )
     p.add_argument(
         "--dry-run", action="store_true", help="do everything, write nothing (rolled back)"
     )

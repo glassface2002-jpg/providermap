@@ -145,6 +145,14 @@ class OrganizationsConfig:
     # heavier bulk query rather than many small ones.
     wikidata_fetch_timeout_seconds: float = 60.0
 
+    # An organization checked (Wikidata + guessing both tried) and still left
+    # with no website isn't retried again until this many days have passed -
+    # otherwise every `enrich-organizations` run re-guesses domains for every
+    # hospital that has ever come up empty. `<= 0` means "always retry,
+    # ignore how recently it was checked" (mirrors `incremental.
+    # refresh_older_than_days`'s convention on the provider side).
+    website_recheck_after_days: int = 30
+
 
 @dataclass
 class Config:

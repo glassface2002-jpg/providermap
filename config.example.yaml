@@ -133,3 +133,8 @@ organizations:
   wikidata_fetch_timeout_seconds: 60.0
   website_enrichment_requests_per_second: 1.0
   website_enrichment_timeout_seconds: 8.0
+
+  # A hospital checked and still left with no website isn't retried again
+  # for this many days - otherwise every enrich-organizations run re-guesses
+  # domains for every hospital that has ever come up empty. 0 = always retry.
+  website_recheck_after_days: 30

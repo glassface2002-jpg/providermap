@@ -22,7 +22,11 @@ partially.
 > `providermap/wikidata_hospitals.py`), then falls back to a best-effort
 > name-guess (`providermap/website_enrichment.py` - genuinely a **guess**,
 > never authoritative, results only ever `Confidence.LOW`/`MEDIUM`) for
-> whatever Wikidata doesn't cover. `providermap link-organizations` (stage 5)
+> whatever Wikidata doesn't cover, and skips re-guessing organizations
+> checked (and still empty) within the last `organizations.
+> website_recheck_after_days` (default 30, schema v5's `website_checked_at`
+> column - `--older-than 0` forces a full re-check regardless). `providermap
+> link-organizations` (stage 5)
 > then populates `provider_organizations` by **exact normalized-name match
 > only, never fuzzy** - a wrong link here would corrupt the answer to this
 > project's actual purpose, so an unmatched provider is left unlinked rather

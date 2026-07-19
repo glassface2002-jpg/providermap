@@ -12,6 +12,7 @@ tests below cover the ingestion path itself - adapter-specific behaviour
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -122,6 +123,47 @@ class TestV3ToV4Migration:
             "value"
         ]
         assert int(version) >= 4
+        db.close()
+
+
+class TestV4ToV5Migration:
+    def test_v4_database_gains_website_checked_at_without_data_loss(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """v5 adds organizations.website_checked_at (see
+        Database.mark_website_checked). A v4 database must gain it
+        additively on open, keeping every existing organization row."""
+        path = tmp_path / "v4.db"
+        conn = sqlite3.connect(path)
+        # A realistic v4 organizations table - every column that version
+        # actually had, minus website_checked_at (the v5 addition).
+        conn.executescript(
+            """
+            CREATE TABLE organizations (
+                organization_id INTEGER PRIMARY KEY, name TEXT, normalized_name TEXT,
+                organization_type TEXT, address TEXT, city TEXT, state TEXT, zip TEXT,
+                phone TEXT, website TEXT, website_confidence TEXT, source TEXT,
+                source_id TEXT, created_date DATETIME, updated_date DATETIME,
+                UNIQUE(source, source_id));
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT);
+            """
+        )
+        conn.execute(
+            "INSERT INTO organizations (name, source, source_id) "
+            "VALUES ('Existing Hospital', 'CMS', '1')"
+        )
+        conn.execute("INSERT INTO schema_meta (key, value) VALUES ('version', '4')")
+        conn.commit()
+        conn.close()
+
+        db = Database(path)  # _migrate() adds website_checked_at here
+
+        row = db.conn.execute("SELECT name, website_checked_at FROM organizations").fetchone()
+        assert row["name"] == "Existing Hospital"
+        assert row["website_checked_at"] is None
+
+        version = db.conn.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()[
+            "value"
+        ]
+        assert int(version) >= 5
         db.close()
 
 
@@ -311,6 +353,79 @@ class TestOrganizationWebsiteEnrichment:
             )
         missing = db.organizations_missing_website(limit=2)
         assert len(missing) == 2
+
+    def test_mark_website_checked_stamps_checked_at_without_setting_website(
+        self, db: Database
+    ) -> None:
+        oid, _ = db.upsert_organization(
+            Organization(name="No Site Found", source="CMS", source_id="1")
+        )
+        assert oid is not None
+        db.mark_website_checked(oid)
+        row = db.conn.execute(
+            "SELECT website, website_checked_at FROM organizations WHERE organization_id=?",
+            (oid,),
+        ).fetchone()
+        assert row["website"] is None
+        assert row["website_checked_at"] is not None
+
+    def test_retry_after_days_excludes_recently_checked_failures(self, db: Database) -> None:
+        """Regression test for the "re-checks everything every run" gap:
+        an organization checked (and found nothing) recently must not show
+        up again until retry_after_days has passed."""
+        oid, _ = db.upsert_organization(
+            Organization(name="Recently Checked, Nothing Found", source="CMS", source_id="1")
+        )
+        assert oid is not None
+        db.mark_website_checked(oid)
+
+        missing = db.organizations_missing_website(retry_after_days=30)
+        assert oid not in [o.organization_id for o in missing]
+
+    def test_retry_after_days_still_includes_never_checked_organizations(
+        self, db: Database
+    ) -> None:
+        oid, _ = db.upsert_organization(
+            Organization(name="Never Checked At All", source="CMS", source_id="1")
+        )
+        assert oid is not None
+        missing = db.organizations_missing_website(retry_after_days=30)
+        assert oid in [o.organization_id for o in missing]
+
+    def test_retry_after_days_includes_staleness_past_the_window(self, db: Database) -> None:
+        oid, _ = db.upsert_organization(
+            Organization(name="Checked Long Ago", source="CMS", source_id="1")
+        )
+        assert oid is not None
+        old_timestamp = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat(
+            timespec="seconds"
+        )
+        db.conn.execute(
+            "UPDATE organizations SET website_checked_at=? WHERE organization_id=?",
+            (old_timestamp, oid),
+        )
+        missing = db.organizations_missing_website(retry_after_days=30)
+        assert oid in [o.organization_id for o in missing]
+
+    def test_retry_after_days_zero_means_always_recheck(self, db: Database) -> None:
+        oid, _ = db.upsert_organization(
+            Organization(name="Just Checked", source="CMS", source_id="1")
+        )
+        assert oid is not None
+        db.mark_website_checked(oid)
+        missing = db.organizations_missing_website(retry_after_days=0)
+        assert oid in [o.organization_id for o in missing]
+
+    def test_none_retry_after_days_means_no_filter_at_all(self, db: Database) -> None:
+        """Default behavior (no argument passed) - unchanged from before this
+        column existed, for callers that don't care about staleness."""
+        oid, _ = db.upsert_organization(
+            Organization(name="Just Checked Too", source="CMS", source_id="1")
+        )
+        assert oid is not None
+        db.mark_website_checked(oid)
+        missing = db.organizations_missing_website()
+        assert oid in [o.organization_id for o in missing]
 
 
 class TestProviderOrganizationLinking:

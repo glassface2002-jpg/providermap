@@ -9,6 +9,16 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`organizations.website_checked_at` (schema v5)** - fixes
+  `enrich-organizations` re-guessing domains for every hospital that has
+  ever come up empty, on every single run. A lookup that finds nothing now
+  stamps `website_checked_at` (`Database.mark_website_checked()`) the same
+  way a successful one does, so `organizations_missing_website()` can skip
+  organizations checked within `organizations.website_recheck_after_days`
+  (default 30) instead of re-trying every one of them every time.
+  `--older-than DAYS` on `enrich-organizations` overrides the config default
+  for one run; `--older-than 0` forces a full re-check regardless of when
+  each organization was last attempted.
 - **CMS auto-fetch + Wikidata-backed website discovery** (ROADMAP.md
   follow-on work). Two changes to remove manual steps from the organization
   pipeline:

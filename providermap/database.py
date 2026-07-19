@@ -76,7 +76,7 @@ from .models import (
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -490,6 +490,9 @@ class Database:
             "provider_locations": [("is_active", "INTEGER DEFAULT 1")],
             "excluded_records": [("last_seen", "DATETIME")],
             "scrape_log": [("last_fetched", "DATETIME"), ("run_id", "INTEGER")],
+            # v5: lets a failed website lookup be distinguished from a
+            # never-attempted one - see organizations_missing_website().
+            "organizations": [("website_checked_at", "DATETIME")],
         }
         for table, cols in additions.items():
             have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
@@ -950,23 +953,61 @@ class Database:
         were part of that UPDATE, a later re-import from an adapter with no
         website field (e.g. ``cms_hospitals``) would pass ``None`` for both
         and silently null out whatever this method previously found. This
-        method only ever touches these two columns.
+        method only ever touches these two columns (plus ``website_checked_at``
+        - see :meth:`mark_website_checked` for the failed-lookup counterpart).
         """
         self.conn.execute(
-            "UPDATE organizations SET website=?, website_confidence=?, updated_date=? "
-            "WHERE organization_id=?",
-            (website, confidence.value, _now(), organization_id),
+            "UPDATE organizations SET website=?, website_confidence=?, "
+            "website_checked_at=?, updated_date=? WHERE organization_id=?",
+            (website, confidence.value, _now(), _now(), organization_id),
         )
         self._commit()
 
-    def organizations_missing_website(self, limit: int | None = None) -> list[Organization]:
+    def mark_website_checked(self, organization_id: int) -> None:
+        """Record that a website lookup was *attempted* for this
+        organization, even though nothing was found.
+
+        Without this, ``organizations_missing_website`` has no way to tell
+        "never looked" apart from "looked and found nothing" - every
+        ``enrich-organizations`` run would re-guess domains for every
+        hospital that previously came up empty, forever. Touches only
+        ``website_checked_at``; ``website``/``website_confidence`` stay
+        ``NULL`` so a future run (past ``retry_after_days``) can still try
+        again - a hospital's site can appear later, or Wikidata's data can
+        improve.
+        """
+        self.conn.execute(
+            "UPDATE organizations SET website_checked_at=? WHERE organization_id=?",
+            (_now(), organization_id),
+        )
+        self._commit()
+
+    def organizations_missing_website(
+        self, limit: int | None = None, retry_after_days: int | None = None
+    ) -> list[Organization]:
         """Organizations with no website yet - the input set for
-        ``providermap enrich-organizations``."""
-        sql = "SELECT * FROM organizations WHERE website IS NULL ORDER BY organization_id"
-        params: tuple[int, ...] = ()
+        ``providermap enrich-organizations``.
+
+        ``retry_after_days`` (default ``None``, meaning no filter - always
+        include every organization with no website) excludes organizations
+        whose last lookup attempt (:meth:`mark_website_checked` or
+        :meth:`set_organization_website`) was more recent than that many
+        days ago, mirroring :meth:`stale_urls`'s convention for the provider
+        side: ``<= 0`` means "recheck everything, ignore how recently it was
+        checked."
+        """
+        sql = "SELECT * FROM organizations WHERE website IS NULL"
+        params: list[object] = []
+        if retry_after_days is not None and retry_after_days > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=retry_after_days)).isoformat(
+                timespec="seconds"
+            )
+            sql += " AND (website_checked_at IS NULL OR website_checked_at < ?)"
+            params.append(cutoff)
+        sql += " ORDER BY organization_id"
         if limit is not None:
             sql += " LIMIT ?"
-            params = (limit,)
+            params.append(limit)
         rows = self.conn.execute(sql, params).fetchall()
         return [_row_to_organization(r) for r in rows]
 
