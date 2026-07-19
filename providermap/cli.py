@@ -233,6 +233,16 @@ def cmd_export(config: Config, args: argparse.Namespace) -> None:
     db.close()
 
 
+def cmd_export_organizations(config: Config, args: argparse.Namespace) -> None:
+    from .exporter import export_organizations
+
+    db = Database(db_path(config, False))
+    out = Path(config.exports.dir) / "organizations.xlsx"
+    n = export_organizations(db, out)
+    print(f"\nWrote {out} ({n} organizations)\n")
+    db.close()
+
+
 def cmd_status(config: Config, args: argparse.Namespace) -> None:
     db = Database(db_path(config, args.test))
     c = db.counts()
@@ -595,6 +605,7 @@ def build_parser() -> argparse.ArgumentParser:
             "    providermap ingest-organizations\n"
             "    providermap enrich-organizations   # best-effort website discovery\n"
             "    providermap link-organizations     # link providers to organizations\n"
+            "    providermap export-organizations   # write organizations.xlsx\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -695,6 +706,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="do everything, write nothing (rolled back)"
     )
 
+    sub.add_parser("export-organizations", help="write organizations.xlsx")
+
     return ap
 
 
@@ -755,6 +768,8 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(cmd_enrich_organizations(config, args))
     elif args.cmd == "link-organizations":
         cmd_link_organizations(config, args)
+    elif args.cmd == "export-organizations":
+        cmd_export_organizations(config, args)
 
 
 if __name__ == "__main__":

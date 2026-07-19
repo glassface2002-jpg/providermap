@@ -30,11 +30,14 @@ partially.
 > then populates `provider_organizations` by **exact normalized-name match
 > only, never fuzzy** - a wrong link here would corrupt the answer to this
 > project's actual purpose, so an unmatched provider is left unlinked rather
-> than guessed at; see `providermap/organization_linking.py`. Everything
-> else verified below concerns the **provider** pipeline, which is unchanged
+> than guessed at; see `providermap/organization_linking.py`. `providermap
+> export-organizations` writes the organization side to `organizations.xlsx`
+> (a linked-provider count, and a confidence breakdown), alongside the three
+> provider workbooks `providermap export` already wrote. Everything else
+> verified below concerns the **provider** pipeline, which is unchanged
 > throughout. See `ROADMAP.md` for the full staged plan and what's
 > deliberately still out of scope (a second organization adapter,
-> human-reviewed fuzzy linking, organization exports).
+> human-reviewed fuzzy linking).
 
 ## AdventHealth access, verified
 

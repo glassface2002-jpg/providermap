@@ -127,12 +127,15 @@ functionality is preserved and re-verified at every stage.
    `Database.link_provider_organization()` relies on the existing
    `UNIQUE(provider_id, organization_id)` constraint for idempotent dedupe.
 
-All five stages above are now shipped. What's *not* yet covered - and would
-be natural follow-on work, not part of this plan - includes a second
-organization adapter (CMS's dataset only covers hospitals, not clinics or
-medical groups), fuzzy/probabilistic linking with human review for the cases
-exact-match deliberately leaves unlinked, and exporting the organization side
-of the data (`exporter.py` still only writes provider workbooks).
+All five stages above are now shipped, plus follow-on work: CMS auto-fetch,
+Wikidata-backed website discovery, a recheck cooldown so failed lookups
+aren't retried every run, and `providermap export-organizations`
+(`exporter.py`'s `organizations.xlsx`, alongside the three provider
+workbooks). What's *not* yet covered - and would be natural follow-on work,
+not part of this plan - includes a second organization adapter (CMS's
+dataset only covers hospitals, not clinics or medical groups), and
+fuzzy/probabilistic linking with human review for the cases exact-match
+deliberately leaves unlinked.
 
 ## Target structure
 

@@ -200,6 +200,7 @@ providermap enrich-organizations             # Wikidata (verified) first, guess 
 providermap enrich-organizations --older-than 0  # force re-check, even recently-failed lookups
 providermap link-organizations --dry-run     # link providers to organizations, rehearsal
 providermap link-organizations               # same, for real (exact name match only, never fuzzy)
+providermap export-organizations             # write organizations.xlsx
 ```
 
 Re-running is always safe: `scrape` skips anything already marked `done`,
@@ -349,6 +350,12 @@ docstring. Highlights:
 | `providers.xlsx` | One row per active provider (23 columns), rows below `high` confidence highlighted; a `Departed` tab for providers no longer in the directory |
 | `excluded_records.xlsx` | Every non-provider record and why, plus a breakdown by classification |
 | `summary.xlsx` | Run stats, provider-type breakdown, site-confidence breakdown, duplicate-review queue, recent field-level changes, full run history, and errors |
+
+`providermap export-organizations` writes a fourth, separate workbook -
+`organizations.xlsx` - one row per organization (rows with no website
+highlighted), a linked-provider count from `provider_organizations`, and a
+"Website Coverage" tab breaking down how many organizations have a website
+at each confidence level.
 
 ```bash
 providermap query "Menezes"

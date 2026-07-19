@@ -9,6 +9,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`providermap export-organizations`** - a fourth workbook,
+  `organizations.xlsx`, alongside the three `providermap export` already
+  writes. One row per organization plus a linked-provider count (from
+  `provider_organizations`), rows with no website highlighted, and a
+  "Website Coverage" tab breaking down how many organizations have a
+  website at each confidence level. `ingest-organizations` /
+  `enrich-organizations` / `link-organizations` only ever wrote to the
+  SQLite database directly; this is the first human-readable output for
+  any of that data.
 - **`organizations.website_checked_at` (schema v5)** - fixes
   `enrich-organizations` re-guessing domains for every hospital that has
   ever come up empty, on every single run. A lookup that finds nothing now

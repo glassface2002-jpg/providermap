@@ -1,6 +1,6 @@
 """Excel exports.
 
-Three workbooks:
+Four workbooks:
 
   providers.xlsx         - the deliverable: one row per active individual
                             provider, plus a "Departed" tab for anyone the
@@ -8,6 +8,11 @@ Three workbooks:
   excluded_records.xlsx  - everything kept out, and why
   summary.xlsx           - run statistics, duplicate review queue, and the
                             incremental-update audit trail
+  organizations.xlsx     - one row per organization (see ``export_organizations``),
+                            written by ``providermap export-organizations``,
+                            separate from the three above since the
+                            organization track (ROADMAP.md) is independent of
+                            the provider scrape/export flow
 
 ``providers.xlsx`` carries two columns beyond a bare provider record -
 Location Count and Site Confidence - because "primary site of care" is only
@@ -290,6 +295,83 @@ def export_summary(db: Database, out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
     log.info("Wrote %s", out)
+
+
+def export_organizations(db: Database, out: Path) -> int:
+    """One row per organization (ROADMAP.md's provider -> organization ->
+    location track), with a linked-provider count from
+    ``provider_organizations`` and a confidence breakdown - the export
+    counterpart to ``ingest-organizations`` / ``enrich-organizations`` /
+    ``link-organizations``, none of which write anything human-readable on
+    their own.
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Organizations"
+
+    headers = [
+        "Organization Name",
+        "Type",
+        "Address",
+        "City",
+        "State",
+        "ZIP",
+        "Phone",
+        "Website",
+        "Website Confidence",
+        "Linked Providers",
+        "Source",
+        "Source ID",
+        "Created Date",
+        "Updated Date",
+    ]
+    ws.append(headers)
+
+    rows = db.conn.execute(
+        """
+        SELECT o.name, o.organization_type, o.address, o.city, o.state, o.zip,
+               o.phone, o.website, o.website_confidence,
+               COUNT(po.provider_id) AS linked_providers,
+               o.source, o.source_id, o.created_date, o.updated_date
+        FROM organizations o
+        LEFT JOIN provider_organizations po ON po.organization_id = o.organization_id
+        GROUP BY o.organization_id
+        ORDER BY o.state, o.name
+        """
+    ).fetchall()
+    for r in rows:
+        ws.append([r[k] for k in r.keys()])  # noqa: SIM118 - sqlite3.Row, not a dict
+
+    # Flag rows with no website yet - the most actionable gap this workbook
+    # exists to surface, mirroring how providers.xlsx flags low/medium
+    # site_confidence.
+    website_col = headers.index("Website") + 1
+    for row in range(2, ws.max_row + 1):
+        if ws.cell(row, website_col).value in (None, ""):
+            for col in range(1, len(headers) + 1):
+                ws.cell(row, col).fill = _FLAG_FILL
+
+    _style(ws, [34, 16, 32, 18, 8, 10, 15, 40, 16, 14, 10, 12, 20, 20])
+
+    ws2 = wb.create_sheet("Website Coverage")
+    ws2.append(["Confidence", "Count", "Meaning"])
+    meaning = {
+        "high": "Verified data (Wikidata) - confirmed to be the real website.",
+        "medium": "Best-effort guess; the organization's name was found on the page.",
+        "low": "Best-effort guess; the page resolved but the name wasn't confirmed on it.",
+        "none": "No website found by either source.",
+    }
+    for r in db.conn.execute(
+        "SELECT COALESCE(website_confidence, 'none') AS bucket, COUNT(*) c "
+        "FROM organizations GROUP BY bucket ORDER BY c DESC"
+    ):
+        ws2.append([r["bucket"], r["c"], meaning.get(r["bucket"], "")])
+    _style(ws2, [14, 10, 66])
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(out)
+    log.info("Wrote %s (%s organizations)", out, len(rows))
+    return len(rows)
 
 
 def export_all(db: Database, outdir: str | Path) -> None:
