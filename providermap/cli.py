@@ -502,7 +502,7 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     db = Database(db_path(config, False), dry_run=args.dry_run)
     orgs = db.organizations_missing_website(limit=args.limit, retry_after_days=older_than)
 
-    wikidata_sites = fetch_wikidata_hospital_websites(
+    wikidata_index = fetch_wikidata_hospital_websites(
         config.politeness.user_agent, config.organizations.wikidata_fetch_timeout_seconds
     )
 
@@ -520,7 +520,16 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
             continue
 
         key = org.normalized_name or normalize_org_name(org.name)
-        wiki_url = wikidata_sites.get(key) if key else None
+        # State-keyed lookup first (disambiguates a name shared by hospitals
+        # in different states - see WikidataHospitalIndex), falling back to
+        # the plain name index for organizations whose state doesn't resolve
+        # to a Wikidata item.
+        wiki_url = None
+        if key:
+            if org.state:
+                wiki_url = wikidata_index.by_name_state.get((key, org.state))
+            if wiki_url is None:
+                wiki_url = wikidata_index.by_name.get(key)
         if wiki_url:
             db.set_organization_website(org.organization_id, wiki_url, Confidence.HIGH)
             found_wikidata += 1
