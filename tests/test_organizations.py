@@ -302,6 +302,32 @@ class TestOrganizationWebsiteEnrichment:
         assert row["website"] == "https://bannerhealth.com"
         assert row["website_confidence"] == "medium"
 
+    def test_set_organization_website_records_optional_source(self, db: Database) -> None:
+        """Phase 3 (HIFLD) provenance tracking - existing callers that don't
+        pass `source` (Wikidata, guessing) leave it NULL, unchanged."""
+        oid, _ = db.upsert_organization(
+            Organization(name="Some Hospital", source="CMS", source_id="2")
+        )
+        assert oid is not None
+        db.set_organization_website(
+            oid, "http://www.somehospital.example", Confidence.MEDIUM, source="HIFLD"
+        )
+        row = db.conn.execute(
+            "SELECT website_source FROM organizations WHERE organization_id=?", (oid,)
+        ).fetchone()
+        assert row["website_source"] == "HIFLD"
+
+    def test_set_organization_website_source_defaults_to_null(self, db: Database) -> None:
+        oid, _ = db.upsert_organization(
+            Organization(name="Another Hospital", source="CMS", source_id="3")
+        )
+        assert oid is not None
+        db.set_organization_website(oid, "https://another.example", Confidence.HIGH)
+        row = db.conn.execute(
+            "SELECT website_source FROM organizations WHERE organization_id=?", (oid,)
+        ).fetchone()
+        assert row["website_source"] is None
+
     def test_reimporting_via_upsert_never_clears_a_discovered_website(self, db: Database) -> None:
         """Regression test: `upsert_organization`'s UPDATE must never touch
         website/website_confidence, since a re-import from an adapter with

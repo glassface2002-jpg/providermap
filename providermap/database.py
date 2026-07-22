@@ -76,7 +76,7 @@ from .models import (
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -492,7 +492,14 @@ class Database:
             "scrape_log": [("last_fetched", "DATETIME"), ("run_id", "INTEGER")],
             # v5: lets a failed website lookup be distinguished from a
             # never-attempted one - see organizations_missing_website().
-            "organizations": [("website_checked_at", "DATETIME")],
+            # v6: which enrichment source supplied website/website_confidence
+            # - see set_organization_website(). Not surfaced on the
+            # Organization dataclass (same as website_checked_at) - it's
+            # persistence-only provenance, not a domain field.
+            "organizations": [
+                ("website_checked_at", "DATETIME"),
+                ("website_source", "TEXT"),
+            ],
         }
         for table, cols in additions.items():
             have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
@@ -942,7 +949,11 @@ class Database:
         return oid, UpsertOutcome.CHANGED
 
     def set_organization_website(
-        self, organization_id: int, website: str, confidence: Confidence
+        self,
+        organization_id: int,
+        website: str,
+        confidence: Confidence,
+        source: str | None = None,
     ) -> None:
         """Record a discovered website for an existing organization.
 
@@ -953,13 +964,18 @@ class Database:
         were part of that UPDATE, a later re-import from an adapter with no
         website field (e.g. ``cms_hospitals``) would pass ``None`` for both
         and silently null out whatever this method previously found. This
-        method only ever touches these two columns (plus ``website_checked_at``
+        method only ever touches these columns (plus ``website_checked_at``
         - see :meth:`mark_website_checked` for the failed-lookup counterpart).
+
+        ``source`` is optional provenance (e.g. ``"HIFLD"``) recorded in
+        ``website_source`` - existing callers that don't pass it (Wikidata,
+        domain-guessing) leave it ``NULL``, unchanged from before this
+        parameter existed.
         """
         self.conn.execute(
             "UPDATE organizations SET website=?, website_confidence=?, "
-            "website_checked_at=?, updated_date=? WHERE organization_id=?",
-            (website, confidence.value, _now(), _now(), organization_id),
+            "website_checked_at=?, website_source=?, updated_date=? WHERE organization_id=?",
+            (website, confidence.value, _now(), source, _now(), organization_id),
         )
         self._commit()
 

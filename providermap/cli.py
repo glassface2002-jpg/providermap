@@ -484,11 +484,15 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
 
     Tries Wikidata's verified hospital website data first (one bulk query -
     see ``providermap/wikidata_hospitals.py`` - a match there is genuinely
-    confirmed data, reported as ``Confidence.HIGH``), then falls back to a
-    best-effort name-guess (``providermap/website_enrichment.py`` - never
-    authoritative, never ``Confidence.HIGH``) for organizations Wikidata
-    doesn't cover.
+    confirmed data, reported as ``Confidence.HIGH``), then HIFLD's Hospitals
+    dataset (``providermap/hifld_hospitals.py`` - HIFLD's own data is
+    measurably stale, so every candidate is reachability-checked before
+    being trusted, and stored only as ``Confidence.MEDIUM``), then falls
+    back to a best-effort name-guess (``providermap/website_enrichment.py``
+    - never authoritative, never ``Confidence.HIGH``) for whatever's still
+    missing.
     """
+    from .hifld_hospitals import fetch_hifld_hospital_index
     from .models import Confidence
     from .parser_utils import normalize_org_name
     from .website_enrichment import discover_website, http_domain_checker
@@ -505,6 +509,9 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     wikidata_index = fetch_wikidata_hospital_websites(
         config.politeness.user_agent, config.organizations.wikidata_fetch_timeout_seconds
     )
+    hifld_index = fetch_hifld_hospital_index(
+        config.politeness.user_agent, config.organizations.hifld_fetch_timeout_seconds
+    )
 
     async def checker(url: str) -> str | None:
         return await http_domain_checker(
@@ -514,6 +521,11 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
         )
 
     found_wikidata = 0
+    hifld_matched = 0
+    hifld_reachable = 0
+    hifld_unreachable = 0
+    hifld_stored = 0
+    hifld_skipped = 0
     found_guess = 0
     for org in orgs:
         if org.organization_id is None:
@@ -535,6 +547,33 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
             found_wikidata += 1
             continue
 
+        # HIFLD - same state-then-name lookup shape as Wikidata, but never
+        # trusted without a live reachability check first (see
+        # hifld_hospitals.py's module docstring for why: its own data is
+        # measurably stale). A matched-but-unreachable candidate still falls
+        # through to the guessing fallback below, same as no match at all -
+        # HIFLD having stale data for an organization shouldn't cost it its
+        # existing chance at a guessed match.
+        hifld_url = None
+        if key:
+            if org.state:
+                hifld_url = hifld_index.by_name_state.get((key, org.state))
+            if hifld_url is None:
+                hifld_url = hifld_index.by_name.get(key)
+        if hifld_url is None:
+            hifld_skipped += 1
+        else:
+            hifld_matched += 1
+            check_url = hifld_url if "://" in hifld_url else f"https://{hifld_url}"
+            if await checker(check_url) is not None:
+                hifld_reachable += 1
+                db.set_organization_website(
+                    org.organization_id, hifld_url, Confidence.MEDIUM, source="HIFLD"
+                )
+                hifld_stored += 1
+                continue
+            hifld_unreachable += 1
+
         url, confidence = await discover_website(
             org, checker, config.organizations.website_enrichment_requests_per_second
         )
@@ -548,6 +587,11 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     print(f"\n{banner}.")
     print(f"  organizations checked : {len(orgs)}")
     print(f"  found via wikidata    : {found_wikidata}")
+    print(f"  hifld matched         : {hifld_matched}")
+    print(f"  hifld reachable       : {hifld_reachable}")
+    print(f"  hifld unreachable     : {hifld_unreachable}")
+    print(f"  hifld stored          : {hifld_stored}")
+    print(f"  hifld skipped (no match) : {hifld_skipped}")
     print(f"  found via guessing    : {found_guess}")
     if args.dry_run:
         print(f"\n  {db.pending_writes} write operation(s) were rolled back.")

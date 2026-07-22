@@ -145,6 +145,12 @@ class OrganizationsConfig:
     # heavier bulk query rather than many small ones.
     wikidata_fetch_timeout_seconds: float = 60.0
 
+    # `providermap enrich-organizations` also queries HIFLD's Hospitals
+    # dataset once per run (see providermap/hifld_hospitals.py), between
+    # Wikidata and guessing - fetched in ~2,000-row pages, so a similarly
+    # generous timeout per page request.
+    hifld_fetch_timeout_seconds: float = 60.0
+
     # An organization checked (Wikidata + guessing both tried) and still left
     # with no website isn't retried again until this many days have passed -
     # otherwise every `enrich-organizations` run re-guesses domains for every

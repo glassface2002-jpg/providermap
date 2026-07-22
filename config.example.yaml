@@ -125,12 +125,16 @@ organizations:
 
   # `providermap enrich-organizations` tries Wikidata's verified hospital
   # website data first (one bulk query - see
-  # providermap/wikidata_hospitals.py), then falls back to a best-effort
-  # name-guess for hospitals Wikidata doesn't cover (see
-  # providermap/website_enrichment.py for why that fallback is a guess,
-  # never authoritative). Requests spread across many unrelated domains, so
-  # this is its own conservative budget, separate from `politeness.*`.
+  # providermap/wikidata_hospitals.py), then HIFLD's Hospitals dataset (see
+  # providermap/hifld_hospitals.py - every match is reachability-checked and
+  # stored only as MEDIUM confidence, since HIFLD's own data is measurably
+  # stale), then falls back to a best-effort name-guess for whatever's still
+  # missing (see providermap/website_enrichment.py for why that fallback is
+  # a guess, never authoritative). Requests spread across many unrelated
+  # domains, so this is its own conservative budget, separate from
+  # `politeness.*`.
   wikidata_fetch_timeout_seconds: 60.0
+  hifld_fetch_timeout_seconds: 60.0
   website_enrichment_requests_per_second: 1.0
   website_enrichment_timeout_seconds: 8.0
 
