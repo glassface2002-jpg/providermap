@@ -68,12 +68,52 @@ def split_name_and_credentials(display: str) -> tuple[str, str]:
     return name, ", ".join(creds)
 
 
+def merge_vcard_title_credentials(creds: str, vcard_title: str | None) -> str:
+    """Fold a vCard ``TITLE`` field's credential suffix into an existing
+    credentials string, if it has one.
+
+    A directory's own display name/vCard ``ORG``/``FN`` sometimes omit a
+    provider's credential even when NPPES's ``credential`` field is blank
+    too; ``TITLE`` (e.g. ``'Jane Doe, MD'``) is a generic vCard field - not
+    specific to any one adapter - that frequently still carries it. This only
+    ever *adds* candidate credential tokens alongside whatever ``creds``
+    already has (via :func:`split_name_and_credentials`, the same parsing
+    used everywhere else a "Name, CREDS" string is split), so it can add
+    matching signal but never remove or override an existing one. Case-
+    insensitively de-duplicates against ``creds`` (e.g. a name and a title
+    that both say "MD" don't produce "MD, MD"). Returns ``creds`` unchanged
+    if ``vcard_title`` is absent or carries no comma-separated credential of
+    its own.
+    """
+    if not vcard_title:
+        return creds
+    _, title_creds = split_name_and_credentials(vcard_title)
+    if not title_creds:
+        return creds
+    existing = [p.strip() for p in creds.split(",") if p.strip()]
+    seen = {p.upper() for p in existing}
+    for part in (p.strip() for p in title_creds.split(",")):
+        if part and part.upper() not in seen:
+            existing.append(part)
+            seen.add(part.upper())
+    return ", ".join(existing)
+
+
 def credential_tokens(credentials: str) -> set[str]:
-    """``'APRN, FNP-C'`` -> ``{'APRN', 'FNP-C'}``, upper-cased and trimmed."""
+    """``'APRN, FNP-C'`` -> ``{'APRN', 'FNP-C'}``, upper-cased and trimmed.
+
+    Periods are stripped from anywhere in the token, not just the ends, so
+    period-formatted credentials from sources like NPPES's ``basic.credential``
+    field (``'M.D.'``, ``'D.O.'``, ``'D.D.S.'``) normalize to the same bare
+    form (``'MD'``, ``'DO'``, ``'DDS'``) that ``PHYSICIAN_CREDENTIALS`` and
+    friends in ``validator.py`` already expect - a token like ``'M.D'`` (only
+    end-stripped) never matches ``'MD'`` and would otherwise silently fail
+    classification for an NPI-1 record NPPES has already confirmed.
+    """
     if not credentials:
         return set()
     toks = re.split(r"[,\s/]+", credentials.upper())
-    return {t.strip(". ") for t in toks if t.strip(". ")}
+    return {t.replace(".", "").strip() for t in toks if t.replace(".", "").strip()}
 
 
 def split_person_name(name: str) -> tuple[str | None, str | None]:

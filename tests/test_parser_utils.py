@@ -8,6 +8,7 @@ from providermap.parser_utils import (
     clean_phone,
     credential_tokens,
     extract_matches,
+    merge_vcard_title_credentials,
     normalize_address_key,
     npi_checksum_valid,
     parse_jsonld_physician,
@@ -63,6 +64,50 @@ class TestNameAndCredentials:
 
     def test_credential_tokens_empty(self) -> None:
         assert credential_tokens("") == set()
+
+    def test_credential_tokens_strips_periods_from_nppes_style_credentials(self) -> None:
+        """NPPES's ``basic.credential`` field commonly uses period-formatted
+        abbreviations (e.g. 'M.D.') rather than the bare form the classifier's
+        credential sets use - these must normalize to match, not just have
+        periods stripped from the ends (which would leave 'M.D' - still not
+        equal to 'MD')."""
+        assert credential_tokens("M.D.") == {"MD"}
+        assert credential_tokens("D.O.") == {"DO"}
+        assert credential_tokens("D.D.S.") == {"DDS"}
+        assert credential_tokens("F.A.C.P.") == {"FACP"}
+        assert credential_tokens("M.D., F.A.C.P.") == {"MD", "FACP"}
+
+
+class TestMergeVcardTitleCredentials:
+    """The pipeline-level vCard TITLE credential fallback (see
+    pipeline.py::process_url) - confirmed live for several real AdventHealth
+    NPI-1 records where NPPES's credential field was blank but the vCard's
+    TITLE field ('Jane Doe, MD') still carried it."""
+
+    def test_title_supplies_credential_when_none_present(self) -> None:
+        assert merge_vcard_title_credentials("", "Daniel Treiyer, MD") == "MD"
+
+    def test_title_supplies_credential_alongside_existing(self) -> None:
+        assert (
+            merge_vcard_title_credentials("APRN", "Jane Doe, APRN, FNP-C")
+            == "APRN, FNP-C"
+        )
+
+    def test_no_vcard_title_leaves_creds_unchanged(self) -> None:
+        assert merge_vcard_title_credentials("MD", None) == "MD"
+        assert merge_vcard_title_credentials("", None) == ""
+
+    def test_duplicate_credential_is_not_repeated(self) -> None:
+        """A display name and a vCard TITLE that both carry 'MD' shouldn't
+        produce 'MD, MD' - confirmed as a real case (a physician whose
+        JSON-LD name and vCard TITLE both say ', MD')."""
+        assert merge_vcard_title_credentials("MD", "Justin Menezes, MD") == "MD"
+
+    def test_title_with_no_comma_has_no_credential_to_extract(self) -> None:
+        """No comma in TITLE means split_name_and_credentials can't isolate
+        a credential (same 'never guess' rule it always follows) - creds
+        stays unchanged rather than treating the whole title as a credential."""
+        assert merge_vcard_title_credentials("", "Just A Name With No Comma") == ""
 
 
 class TestPersonNameSplit:

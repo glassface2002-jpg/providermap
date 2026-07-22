@@ -7,6 +7,7 @@ were an individual provider.
 
 from __future__ import annotations
 
+from providermap import parser_utils as P
 from providermap import validator as V
 from providermap.models import Confidence, NpiPolicy, Provider, ProviderType
 
@@ -60,6 +61,171 @@ class TestClassifyWithNppes:
         result = V.classify("Smith and Jones, MD", "MD", TRICKY_ORG_NPPES)
         assert not result.is_individual
         assert result.provider_type == ProviderType.ORGANIZATION
+
+    def test_nppes_period_formatted_credential_alone_still_classifies_physician(self) -> None:
+        """Regression for a real, live-traced case: NPPES's own
+        ``basic.credential`` is period-formatted ('M.D.') and the display name
+        carries no credential at all (e.g. because the profile page/vCard
+        display didn't repeat one), and the primary taxonomy description
+        ('Internal Medicine, Nephrology') doesn't contain any of
+        physician/surgeon/allopathic/osteopathic. Before the
+        ``credential_tokens`` period-stripping fix, 'M.D.' normalized to
+        'M.D' (not 'MD'), never matched PHYSICIAN_CREDENTIALS, and this fell
+        through to ProviderType.UNKNOWN despite NPPES confirming an
+        individual with a physician credential."""
+        nppes = {
+            "enumeration_type": "NPI-1",
+            "basic": {"first_name": "MARK", "last_name": "LAGATTA", "credential": "M.D."},
+            "taxonomies": [
+                {"primary": True, "code": "207RN0300X", "desc": "Internal Medicine, Nephrology"}
+            ],
+        }
+        result = V.classify("Mark LaGatta", "", nppes)
+        assert result.provider_type == ProviderType.PHYSICIAN
+        assert result.is_individual
+
+
+class TestAppCredentialCoverage:
+    """Regression coverage for a credential-set audit against 500 real
+    NPPES records: 'NP-C' was confirmed missing from APP_CREDENTIALS in real
+    data; 'APRN-BC' and 'RN-BC' were added as pattern-consistent additions
+    (same '-BC' board-certification suffix already present via 'FNP-BC'),
+    though not themselves observed in that sample."""
+
+    def test_np_c_credential_is_advanced_practice_provider(self) -> None:
+        """Confirmed from real NPPES data (Cindy Alvarez, NPI 1033633250,
+        taxonomy 'Nurse Practitioner, Pediatrics') - was previously
+        unmatched and fell through to ProviderType.UNKNOWN."""
+        nppes = {
+            "enumeration_type": "NPI-1",
+            "basic": {"first_name": "CINDY", "last_name": "ALVAREZ", "credential": "NP-C"},
+            "taxonomies": [
+                {"primary": True, "code": "363LP2300X", "desc": "Nurse Practitioner, Pediatrics"}
+            ],
+        }
+        result = V.classify("Cindy Alvarez", "", nppes)
+        assert result.provider_type == ProviderType.ADVANCED_PRACTICE_PROVIDER
+        assert result.is_individual
+
+    def test_aprn_bc_credential_is_advanced_practice_provider(self) -> None:
+        result = V.classify("Some Person, APRN-BC", "APRN-BC", None)
+        assert result.provider_type == ProviderType.ADVANCED_PRACTICE_PROVIDER
+        assert result.is_individual
+
+    def test_rn_bc_credential_is_advanced_practice_provider(self) -> None:
+        result = V.classify("Some Person, RN-BC", "RN-BC", None)
+        assert result.provider_type == ProviderType.ADVANCED_PRACTICE_PROVIDER
+        assert result.is_individual
+
+    def test_existing_app_credentials_still_classify_unchanged(self) -> None:
+        """Guards against the set expansion above accidentally disturbing
+        credentials that already worked."""
+        for display, cred in [
+            ("Some Person, APRN", "APRN"),
+            ("Some Person, FNP-C", "FNP-C"),
+            ("Some Person, FNP-BC", "FNP-BC"),
+            ("Some Person, PA-C", "PA-C"),
+            ("Some Person, CRNA", "CRNA"),
+        ]:
+            result = V.classify(display, cred, None)
+            assert result.provider_type == ProviderType.ADVANCED_PRACTICE_PROVIDER, cred
+
+    def test_existing_physician_credential_still_classifies_unchanged(self) -> None:
+        result = V.classify("Justin Menezes, MD", "MD", None)
+        assert result.provider_type == ProviderType.PHYSICIAN
+
+
+class TestVcardTitleFallbackRecovery:
+    """Regression coverage for the pipeline-level vCard TITLE credential
+    fallback (parser_utils.merge_vcard_title_credentials, wired into
+    pipeline.py::process_url). Each test reproduces exactly what the
+    pipeline does: merge the vCard-derived credentials in, then classify.
+    NPI/name/taxonomy values are from real, live-captured AdventHealth
+    records where NPPES's own ``credential`` field was blank but the vCard
+    TITLE field still carried the credential."""
+
+    def test_daniel_treiyer_recovered_via_vcard_title(self) -> None:
+        # Real NPI 1063703403.
+        nppes = {
+            "enumeration_type": "NPI-1",
+            "basic": {"first_name": "DANIEL", "last_name": "TREIYER", "credential": ""},
+            "taxonomies": [{"primary": True, "code": "207R00000X", "desc": "Internal Medicine"}],
+        }
+        creds = P.merge_vcard_title_credentials("", "Daniel Treiyer, MD")
+        result = V.classify("Daniel Treiyer", creds, nppes)
+        assert result.provider_type == ProviderType.PHYSICIAN
+
+    def test_hana_chaim_do_recovered_via_vcard_title(self) -> None:
+        # Real NPI 1144250341.
+        nppes = {
+            "enumeration_type": "NPI-1",
+            "basic": {"first_name": "HANA", "last_name": "CHAIM", "credential": ""},
+            "taxonomies": [{"primary": True, "code": "207Q00000X", "desc": "Allergy & Immunology"}],
+        }
+        creds = P.merge_vcard_title_credentials("", "Hana T Chaim, DO")
+        result = V.classify("Hana Chaim", creds, nppes)
+        assert result.provider_type == ProviderType.PHYSICIAN
+
+    def test_kyle_duffy_dmd_recovered_via_vcard_title(self) -> None:
+        # Real NPI 1073929568 - a dental credential (DMD), still the
+        # "correct clinician classification" per PHYSICIAN_CREDENTIALS
+        # (which already includes DDS/DMD alongside MD/DO).
+        nppes = {
+            "enumeration_type": "NPI-1",
+            "basic": {"first_name": "KYLE", "last_name": "DUFFY", "credential": ""},
+            "taxonomies": [{"primary": True, "code": "1223D0001X", "desc": "Dentist"}],
+        }
+        creds = P.merge_vcard_title_credentials("", "Kyle Duffy, DMD")
+        result = V.classify("Kyle Duffy", creds, nppes)
+        assert result.provider_type == ProviderType.PHYSICIAN
+
+    def test_marla_robbins_recovered_via_vcard_title(self) -> None:
+        """Real NPI 1013987304: NPPES's own credential field is
+        space-separated ('M D') - a distinct, explicitly-deferred
+        whitespace-normalization gap, NOT fixed in this round. The vCard
+        TITLE field is unaffected by that and carries a clean 'MD', which is
+        what actually recovers this record today (the live-captured
+        vcard.title was 'Marla A Robbins, MD', not a space-separated
+        credential - the malformed 'M D' only ever appeared in NPPES's
+        field, not the vCard)."""
+        nppes = {
+            "enumeration_type": "NPI-1",
+            "basic": {"first_name": "MARLA", "last_name": "ROBBINS", "credential": "M D"},
+            "taxonomies": [{"primary": True, "code": "208000000X", "desc": "Pediatrics"}],
+        }
+        creds = P.merge_vcard_title_credentials("", "Marla A Robbins, MD")
+        result = V.classify("Marla Robbins", creds, nppes)
+        assert result.provider_type == ProviderType.PHYSICIAN
+
+    def test_whitney_breen_aprn_c_recovered_via_vcard_title(self) -> None:
+        """Real NPI 1013464734: NPPES credential blank; vcard.title =
+        'Whitney Breen, APRN-C'. Recovered by combining this fallback with
+        adding 'APRN-C' to APP_CREDENTIALS."""
+        nppes = {
+            "enumeration_type": "NPI-1",
+            "basic": {"first_name": "WHITNEY", "last_name": "BREEN", "credential": ""},
+            "taxonomies": [
+                {"primary": True, "code": "363LF0000X", "desc": "Nurse Practitioner, Family"}
+            ],
+        }
+        creds = P.merge_vcard_title_credentials("", "Whitney Breen, APRN-C")
+        result = V.classify("Whitney Breen", creds, nppes)
+        assert result.provider_type == ProviderType.ADVANCED_PRACTICE_PROVIDER
+
+    def test_title_with_no_recognized_credential_does_not_force_a_classification(self) -> None:
+        """A vCard TITLE like 'German Mikheyev, Resident' has a comma but no
+        recognized credential token ('Resident' isn't a licensure credential)
+        - must not create a false positive classification. Real NPI
+        1073993077, live-observed exactly this way."""
+        nppes = {
+            "enumeration_type": "NPI-1",
+            "basic": {"first_name": "GERMAN", "last_name": "MIKHEYEV", "credential": ""},
+            "taxonomies": [{"primary": True, "code": "213E00000X", "desc": "Podiatrist"}],
+        }
+        creds = P.merge_vcard_title_credentials("", "German Mikheyev, Resident")
+        result = V.classify("German Mikheyev", creds, nppes)
+        assert result.provider_type == ProviderType.UNKNOWN
+        assert not result.is_individual
 
 
 class TestClassifyWithoutNppes:

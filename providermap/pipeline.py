@@ -181,6 +181,16 @@ class Pipeline:
             return UpsertOutcome.EXCLUDED
 
         name_only, creds = P.split_name_and_credentials(display)
+
+        # A vCard's TITLE field often carries a credential suffix (e.g.
+        # "Jane Doe, MD") that ORG/FN don't repeat - confirmed live for
+        # several AdventHealth records where NPPES's own credential field was
+        # blank. See parser_utils.merge_vcard_title_credentials: adapter-
+        # independent (VCardData.title is a generic field), additive only
+        # (never overrides display/name construction above or classify()'s
+        # existing rule order).
+        creds = P.merge_vcard_title_credentials(creds, vcard.title if vcard else None)
+
         result = V.classify(
             display or None, creds, nppes_rec, self.adapter.organization_name_patterns()
         )

@@ -503,6 +503,19 @@ def build_dataset() -> dict[str, Any]:
     # og:title/<title> HTML scraping already present on the same page.
     records[2].jsonld = '{"@context": "https://schema.org", "@type": "Physician", "name": '
 
+    # The "duplicate URL, same NPI" alias above models a site serving the
+    # identical provider at a second URL shape (e.g. AdventHealth's real
+    # /doctors/... and /find-doctor/doctor/... both resolve the same NPI) -
+    # a genuine duplicate must render the same underlying content, not a
+    # thinner one. Without this, the alias's page/vCard carry none of
+    # record 0's site/JSON-LD data, so whichever of the two same-NPI URLs
+    # happens to finish last in enrich_all's concurrent batch silently
+    # blanks out fields (e.g. hospital_affiliation) the other one populated
+    # - a race on processing order the fixture shouldn't depend on.
+    alias_record = next(r for r in records if r.kind == "alias" and r.of == dup_of_index)
+    alias_record.site = records[dup_of_index].site
+    alias_record.jsonld = records[dup_of_index].jsonld
+
     return {
         "records": records,
         "by_npi": {r.npi: r for r in records},

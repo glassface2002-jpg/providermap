@@ -34,9 +34,12 @@ PHYSICIAN_CREDENTIALS = {"MD", "DO", "MBBS", "MBBCH", "MB", "DPM", "DDS", "DMD",
 # Credential tokens that identify an advanced practice provider.
 APP_CREDENTIALS = {
     "APRN",
+    "APRN-BC",
+    "APRN-C",
     "ARNP",
     "APN",
     "NP",
+    "NP-C",
     "FNP",
     "FNP-C",
     "FNP-BC",
@@ -55,6 +58,7 @@ APP_CREDENTIALS = {
     "PA-C",
     "DNP",
     "MSN",
+    "RN-BC",
 }
 
 # Credential tokens for other licensed individuals: real people, but neither
