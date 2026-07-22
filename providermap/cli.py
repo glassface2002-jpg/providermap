@@ -491,9 +491,17 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     back to a best-effort name-guess (``providermap/website_enrichment.py``
     - never authoritative, never ``Confidence.HIGH``) for whatever's still
     missing.
+
+    Every candidate this cascade considers - not just the one it promotes -
+    is also logged to ``website_candidates`` (schema v8, see
+    ``Database.add_website_candidate``), including a HIFLD match that failed
+    its reachability check. This is purely an audit trail: it changes
+    nothing about which website ends up on ``organizations.website``, the
+    order sources are tried in, or any of the counters printed below - see
+    ROADMAP.md's Phase 5.3 notes.
     """
     from .hifld_hospitals import fetch_hifld_hospital_index
-    from .models import Confidence
+    from .models import Confidence, ResolutionMethod
     from .parser_utils import normalize_org_name
     from .website_enrichment import discover_website, http_domain_checker
     from .wikidata_hospitals import fetch_wikidata_hospital_websites
@@ -544,6 +552,14 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
                 wiki_url = wikidata_index.by_name.get(key)
         if wiki_url:
             db.set_organization_website(org.organization_id, wiki_url, Confidence.HIGH)
+            db.add_website_candidate(
+                org.organization_id,
+                wiki_url,
+                ResolutionMethod.WIKIDATA,
+                reachable=None,  # Wikidata matches aren't reachability-checked
+                confidence=Confidence.HIGH,
+                promoted=True,
+            )
             found_wikidata += 1
             continue
 
@@ -570,15 +586,38 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
                 db.set_organization_website(
                     org.organization_id, hifld_url, Confidence.MEDIUM, source="HIFLD"
                 )
+                db.add_website_candidate(
+                    org.organization_id,
+                    hifld_url,
+                    ResolutionMethod.HIFLD,
+                    reachable=True,
+                    confidence=Confidence.MEDIUM,
+                    promoted=True,
+                )
                 hifld_stored += 1
                 continue
             hifld_unreachable += 1
+            db.add_website_candidate(
+                org.organization_id,
+                hifld_url,
+                ResolutionMethod.HIFLD,
+                reachable=False,
+                promoted=False,
+            )
 
         url, confidence = await discover_website(
             org, checker, config.organizations.website_enrichment_requests_per_second
         )
         if url and confidence is not None:
             db.set_organization_website(org.organization_id, url, confidence)
+            db.add_website_candidate(
+                org.organization_id,
+                url,
+                ResolutionMethod.GUESS,
+                reachable=True,
+                confidence=confidence,
+                promoted=True,
+            )
             found_guess += 1
         else:
             db.mark_website_checked(org.organization_id)

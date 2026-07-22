@@ -64,19 +64,25 @@ from .models import (
     TRACKED_FIELDS,
     Confidence,
     ExcludedRecord,
+    HealthSystem,
+    IdentityConfidence,
     Location,
     Organization,
+    OrganizationAlias,
+    OrganizationSystemMembership,
     Provider,
     ProviderChange,
     ProviderType,
+    ResolutionMethod,
     RunRecord,
     ScrapeStatus,
     UpsertOutcome,
+    WebsiteCandidate,
 )
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -260,6 +266,79 @@ INSERT OR IGNORE INTO sources (name, description) VALUES
     ('CMS',           'Centers for Medicare & Medicaid Services datasets'),
     ('AdventHealth',  'AdventHealth provider directory (reference adapter)'),
     ('Manual Review', 'Human-entered or human-corrected data');
+
+-- ------------------------------------------------------------------------ --
+-- Organization identity resolution (schema v7). Answers "what organization
+-- is this, really, and what is it part of" - aliases and parent-system
+-- membership - kept deliberately separate from website enrichment
+-- (organizations.website/website_confidence/website_source above), which
+-- only ever *consumes* these facts, never owns them. See ROADMAP.md's
+-- Phase 5.1 architecture notes for the full boundary rationale. Additive:
+-- three new, empty tables on an existing database; nothing in `organizations`
+-- or any provider table is touched.
+-- ------------------------------------------------------------------------ --
+
+-- Parent health systems (Ballad Health, Ascension, Mercy, ...) as first-class
+-- entities, independent of any one facility.
+CREATE TABLE IF NOT EXISTS health_systems (
+    system_id       INTEGER PRIMARY KEY,
+    name            TEXT,
+    normalized_name TEXT,
+    primary_domain  TEXT,
+    created_at      DATETIME
+);
+
+-- Alternate names for an organization - rebrands, historical names, Wikidata
+-- aliases. No FK points into this table, so its primary key is a plain `id`,
+-- matching the convention already used for provider_organizations/
+-- excluded_records/scrape_log/provider_changes.
+CREATE TABLE IF NOT EXISTS organization_aliases (
+    id               INTEGER PRIMARY KEY,
+    organization_id  INTEGER REFERENCES organizations(organization_id) ON DELETE CASCADE,
+    alias            TEXT,
+    normalized_alias TEXT,
+    source           TEXT,
+    confidence       TEXT,
+    created_at       DATETIME
+);
+
+-- Facility -> health system, with history: an ownership change closes the
+-- old row (valid_to) and opens a new one rather than overwriting it.
+-- `website_candidates` (Phase 5.3) will reference this table's PK, so it
+-- gets a descriptive `membership_id`, not a plain `id`.
+CREATE TABLE IF NOT EXISTS organization_system_membership (
+    membership_id    INTEGER PRIMARY KEY,
+    organization_id  INTEGER REFERENCES organizations(organization_id) ON DELETE CASCADE,
+    system_id        INTEGER REFERENCES health_systems(system_id) ON DELETE CASCADE,
+    source           TEXT,
+    confidence       TEXT,
+    valid_from       DATETIME,
+    valid_to         DATETIME,
+    created_at       DATETIME
+);
+
+-- ------------------------------------------------------------------------ --
+-- Website candidate audit trail (schema v8). Website Enrichment's own
+-- table - Identity Resolution above has no awareness it exists. Logs every
+-- URL the existing Wikidata/HIFLD/guessing cascade considers, not just the
+-- one it promotes, so a rejected candidate (e.g. a HIFLD match that failed
+-- its reachability check) is a queryable row instead of a number that
+-- vanishes into a counter. See ROADMAP.md's Phase 5.1 architecture notes
+-- and Phase 5.3's own notes for the full rationale. Purely additive: one
+-- new, empty table; `cmd_enrich_organizations`'s actual promotion logic
+-- (which URL ends up in organizations.website) is unchanged by this.
+-- ------------------------------------------------------------------------ --
+CREATE TABLE IF NOT EXISTS website_candidates (
+    candidate_id          INTEGER PRIMARY KEY,
+    organization_id       INTEGER REFERENCES organizations(organization_id) ON DELETE CASCADE,
+    candidate_url         TEXT,
+    resolution_method     TEXT,
+    reachable             INTEGER,  -- NULL = not checked, 1/0 otherwise
+    confidence            TEXT,
+    system_membership_id  INTEGER REFERENCES organization_system_membership(membership_id),
+    promoted              INTEGER DEFAULT 0,
+    created_at            DATETIME
+);
 """
 
 # Applied AFTER _migrate(), never inside SCHEMA - see module docstring.
@@ -280,6 +359,16 @@ CREATE INDEX IF NOT EXISTS idx_orgs_state           ON organizations(state);
 CREATE INDEX IF NOT EXISTS idx_orgs_source          ON organizations(source);
 CREATE INDEX IF NOT EXISTS idx_prov_orgs_provider   ON provider_organizations(provider_id);
 CREATE INDEX IF NOT EXISTS idx_prov_orgs_org        ON provider_organizations(organization_id);
+
+-- Organization identity resolution (schema v7).
+CREATE INDEX IF NOT EXISTS idx_health_systems_normalized     ON health_systems(normalized_name);
+CREATE INDEX IF NOT EXISTS idx_org_aliases_org               ON organization_aliases(organization_id);
+CREATE INDEX IF NOT EXISTS idx_org_aliases_normalized        ON organization_aliases(normalized_alias);
+CREATE INDEX IF NOT EXISTS idx_org_sys_membership_org        ON organization_system_membership(organization_id);
+CREATE INDEX IF NOT EXISTS idx_org_sys_membership_system     ON organization_system_membership(system_id);
+
+-- Website candidate audit trail (schema v8).
+CREATE INDEX IF NOT EXISTS idx_website_candidates_org        ON website_candidates(organization_id);
 """
 
 WRITE_COLS: tuple[str, ...] = (
@@ -442,6 +531,57 @@ def _row_to_organization(row: sqlite3.Row) -> Organization:
     )
 
 
+def _row_to_health_system(row: sqlite3.Row) -> HealthSystem:
+    return HealthSystem(
+        system_id=row["system_id"],
+        name=row["name"],
+        normalized_name=row["normalized_name"],
+        primary_domain=row["primary_domain"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_organization_alias(row: sqlite3.Row) -> OrganizationAlias:
+    return OrganizationAlias(
+        id=row["id"],
+        organization_id=row["organization_id"],
+        alias=row["alias"],
+        normalized_alias=row["normalized_alias"],
+        source=row["source"],
+        confidence=IdentityConfidence(row["confidence"]) if row["confidence"] else None,
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_organization_system_membership(row: sqlite3.Row) -> OrganizationSystemMembership:
+    return OrganizationSystemMembership(
+        membership_id=row["membership_id"],
+        organization_id=row["organization_id"],
+        system_id=row["system_id"],
+        source=row["source"],
+        confidence=IdentityConfidence(row["confidence"]) if row["confidence"] else None,
+        valid_from=row["valid_from"],
+        valid_to=row["valid_to"],
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_website_candidate(row: sqlite3.Row) -> WebsiteCandidate:
+    return WebsiteCandidate(
+        candidate_id=row["candidate_id"],
+        organization_id=row["organization_id"],
+        candidate_url=row["candidate_url"],
+        resolution_method=(
+            ResolutionMethod(row["resolution_method"]) if row["resolution_method"] else None
+        ),
+        reachable=(bool(row["reachable"]) if row["reachable"] is not None else None),
+        confidence=Confidence(row["confidence"]) if row["confidence"] else None,
+        system_membership_id=row["system_membership_id"],
+        promoted=bool(row["promoted"]),
+        created_at=row["created_at"],
+    )
+
+
 class Database:
     def __init__(self, path: str | Path, dry_run: bool = False):
         self.path = Path(path)
@@ -500,6 +640,15 @@ class Database:
                 ("website_checked_at", "DATETIME"),
                 ("website_source", "TEXT"),
             ],
+            # v7 (health_systems, organization_aliases,
+            # organization_system_membership) needs no entry here - it only
+            # adds brand-new tables via `CREATE TABLE IF NOT EXISTS` in
+            # SCHEMA (same mechanism the v4 organizations foundation used),
+            # never new columns on an existing table. The version bump below
+            # still runs so `schema_meta` accurately reflects that an
+            # existing v6 database has now seen the v7 schema.
+            # v8 (website_candidates) is the same story - a brand-new table,
+            # nothing added to any existing one.
         }
         for table, cols in additions.items():
             have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
@@ -1076,6 +1225,236 @@ class Database:
             "SELECT * FROM organizations WHERE normalized_name IS NOT NULL"
         ).fetchall()
         return {r["normalized_name"]: _row_to_organization(r) for r in rows}
+
+    # ------------------------------------------------------------------ #
+    # organization identity resolution (schema v7)
+    #
+    # Answers "what organization is this, really, and what is it part of" -
+    # aliases and parent-system membership. Deliberately has no knowledge of
+    # websites/URLs/reachability; Website Enrichment (set_organization_website
+    # above) is the only consumer of these facts, never their owner. See
+    # ROADMAP.md's Phase 5.1 architecture notes for the full boundary
+    # rationale.
+    # ------------------------------------------------------------------ #
+
+    def get_or_create_health_system(
+        self, name: str, normalized_name: str, primary_domain: str | None = None
+    ) -> int:
+        """Look up a health system by ``normalized_name``, creating it if it
+        doesn't exist yet. Idempotent by design - re-running a seed script
+        must not create duplicate rows. Unlike ``organizations``, there's no
+        ``UNIQUE`` constraint enforcing this at the schema level
+        (``organizations.normalized_name`` isn't unique either, for the same
+        reason: two real-world entities can plausibly share a normalized
+        name); this method's job is seeding a small, hand-curated list, not
+        deduping an untrusted bulk import.
+
+        If the system already exists and ``primary_domain`` is provided but
+        the existing row has none, the existing row is updated - filling in
+        a previously-unknown domain, never silently overwriting a known one.
+        """
+        row = self.conn.execute(
+            "SELECT * FROM health_systems WHERE normalized_name=?", (normalized_name,)
+        ).fetchone()
+        if row is not None:
+            sid: int = row["system_id"]
+            if primary_domain and not row["primary_domain"]:
+                self.conn.execute(
+                    "UPDATE health_systems SET primary_domain=? WHERE system_id=?",
+                    (primary_domain, sid),
+                )
+                self._commit()
+            return sid
+        cur = self.conn.execute(
+            "INSERT INTO health_systems (name, normalized_name, primary_domain, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (name, normalized_name, primary_domain, _now()),
+        )
+        self._commit()
+        assert cur.lastrowid is not None
+        return cur.lastrowid
+
+    def get_health_system(self, system_id: int) -> HealthSystem | None:
+        row = self.conn.execute(
+            "SELECT * FROM health_systems WHERE system_id=?", (system_id,)
+        ).fetchone()
+        return _row_to_health_system(row) if row else None
+
+    def health_system_by_normalized_name(self, normalized_name: str) -> HealthSystem | None:
+        row = self.conn.execute(
+            "SELECT * FROM health_systems WHERE normalized_name=?", (normalized_name,)
+        ).fetchone()
+        return _row_to_health_system(row) if row else None
+
+    def add_organization_alias(
+        self,
+        organization_id: int,
+        alias: str,
+        normalized_alias: str,
+        source: str | None = None,
+        confidence: IdentityConfidence | None = None,
+    ) -> int:
+        """Record an alternate name for an organization. Idempotent: a
+        second call with the same ``(organization_id, normalized_alias)`` is
+        a no-op that returns the existing row's id rather than creating a
+        duplicate - the same discipline :meth:`link_provider_organization`
+        uses for provider/organization links.
+        """
+        existing = self.conn.execute(
+            "SELECT id FROM organization_aliases "
+            "WHERE organization_id=? AND normalized_alias=?",
+            (organization_id, normalized_alias),
+        ).fetchone()
+        if existing is not None:
+            eid: int = existing["id"]
+            return eid
+        cur = self.conn.execute(
+            "INSERT INTO organization_aliases "
+            "(organization_id, alias, normalized_alias, source, confidence, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                organization_id,
+                alias,
+                normalized_alias,
+                source,
+                confidence.value if confidence else None,
+                _now(),
+            ),
+        )
+        self._commit()
+        assert cur.lastrowid is not None
+        return cur.lastrowid
+
+    def get_aliases_for_organization(self, organization_id: int) -> list[OrganizationAlias]:
+        rows = self.conn.execute(
+            "SELECT * FROM organization_aliases WHERE organization_id=? ORDER BY id",
+            (organization_id,),
+        ).fetchall()
+        return [_row_to_organization_alias(r) for r in rows]
+
+    def set_system_membership(
+        self,
+        organization_id: int,
+        system_id: int,
+        source: str | None = None,
+        confidence: IdentityConfidence | None = None,
+    ) -> int:
+        """Record ``organization_id`` as currently belonging to ``system_id``.
+
+        If an active membership (``valid_to IS NULL``) to this same system
+        already exists, this is a no-op that returns its id - re-running a
+        backfill must not create duplicate active rows. If an active
+        membership to a *different* system exists, that row is closed
+        (``valid_to`` set to now) before the new one opens, preserving
+        history instead of overwriting it - see
+        :class:`~providermap.models.OrganizationSystemMembership`.
+        """
+        active = self.conn.execute(
+            "SELECT * FROM organization_system_membership "
+            "WHERE organization_id=? AND valid_to IS NULL",
+            (organization_id,),
+        ).fetchone()
+        if active is not None:
+            if active["system_id"] == system_id:
+                mid: int = active["membership_id"]
+                return mid
+            self.conn.execute(
+                "UPDATE organization_system_membership SET valid_to=? WHERE membership_id=?",
+                (_now(), active["membership_id"]),
+            )
+
+        cur = self.conn.execute(
+            "INSERT INTO organization_system_membership "
+            "(organization_id, system_id, source, confidence, valid_from, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                organization_id,
+                system_id,
+                source,
+                confidence.value if confidence else None,
+                _now(),
+                _now(),
+            ),
+        )
+        self._commit()
+        assert cur.lastrowid is not None
+        return cur.lastrowid
+
+    def get_current_system_membership(
+        self, organization_id: int
+    ) -> OrganizationSystemMembership | None:
+        row = self.conn.execute(
+            "SELECT * FROM organization_system_membership "
+            "WHERE organization_id=? AND valid_to IS NULL",
+            (organization_id,),
+        ).fetchone()
+        return _row_to_organization_system_membership(row) if row else None
+
+    def organizations_for_system(self, system_id: int) -> list[Organization]:
+        """Every organization currently (``valid_to IS NULL``) linked to
+        this system - the rollup-query use case (see Phase 5.1's
+        scalability review)."""
+        rows = self.conn.execute(
+            "SELECT o.* FROM organizations o "
+            "JOIN organization_system_membership m ON m.organization_id = o.organization_id "
+            "WHERE m.system_id=? AND m.valid_to IS NULL "
+            "ORDER BY o.organization_id",
+            (system_id,),
+        ).fetchall()
+        return [_row_to_organization(r) for r in rows]
+
+    # ------------------------------------------------------------------ #
+    # website candidate audit trail (schema v8)
+    #
+    # Website Enrichment's own table - logs every URL the enrichment
+    # cascade considers, not just the one it promotes. Identity Resolution
+    # above has no awareness this exists; this section may read identity
+    # tables (via the optional system_membership_id) but never writes to
+    # them. See ROADMAP.md's Phase 5.1/5.3 notes.
+    # ------------------------------------------------------------------ #
+
+    def add_website_candidate(
+        self,
+        organization_id: int,
+        candidate_url: str,
+        resolution_method: ResolutionMethod,
+        reachable: bool | None = None,
+        confidence: Confidence | None = None,
+        system_membership_id: int | None = None,
+        promoted: bool = False,
+    ) -> int:
+        """Log one candidate URL considered for ``organization_id``, whether
+        or not it was promoted. Purely additive logging - never touches
+        ``organizations.website``/``website_confidence``/``website_source``
+        (see :meth:`set_organization_website` for the method that actually
+        promotes a website; callers are expected to call both when a
+        candidate is promoted, not one instead of the other).
+        """
+        cur = self.conn.execute(
+            "INSERT INTO website_candidates (organization_id, candidate_url, "
+            "resolution_method, reachable, confidence, system_membership_id, "
+            "promoted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                organization_id,
+                candidate_url,
+                resolution_method.value,
+                (int(reachable) if reachable is not None else None),
+                confidence.value if confidence else None,
+                system_membership_id,
+                int(promoted),
+                _now(),
+            ),
+        )
+        self._commit()
+        assert cur.lastrowid is not None
+        return cur.lastrowid
+
+    def get_candidates_for_organization(self, organization_id: int) -> list[WebsiteCandidate]:
+        rows = self.conn.execute(
+            "SELECT * FROM website_candidates WHERE organization_id=? ORDER BY candidate_id",
+            (organization_id,),
+        ).fetchall()
+        return [_row_to_website_candidate(r) for r in rows]
 
     # ------------------------------------------------------------------ #
     # exclusions
