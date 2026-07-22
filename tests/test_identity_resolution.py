@@ -22,6 +22,7 @@ from providermap.identity_resolution import (
     WikidataAliasIndex,
     _build_alias_index,
     backfill_organization_aliases,
+    get_candidate_keys,
     seed_health_systems,
 )
 from providermap.models import IdentityConfidence, Organization
@@ -421,3 +422,98 @@ class TestV6ToV7Migration:
         count = db2.conn.execute("SELECT COUNT(*) FROM health_systems").fetchone()[0]
         assert count == len(HEALTH_SYSTEM_SEEDS)  # not duplicated
         db2.close()
+
+
+class TestGetCandidateKeys:
+    """`get_candidate_keys` (ROADMAP.md Phase 5.5) - the single place
+    cross-source matching's key-generation policy lives. Callers (Wikidata/
+    HIFLD/VA matching in cli.py) never hardcode "own name plus which alias
+    tier" themselves; these tests pin down what that policy actually is
+    today so a future change to it shows up here, not as a surprise in the
+    live cascade.
+    """
+
+    def test_organization_with_no_aliases_returns_just_its_own_name(self, db: Database) -> None:
+        oid, _ = db.upsert_organization(
+            Organization(
+                name="Test Hospital", normalized_name="test hospital", source="CMS", source_id="1"
+            )
+        )
+        org = Organization(
+            organization_id=oid, name="Test Hospital", normalized_name="test hospital"
+        )
+        assert get_candidate_keys(org, db) == ["test hospital"]
+
+    def test_own_name_is_always_first_followed_by_high_confidence_aliases(
+        self, db: Database
+    ) -> None:
+        oid, _ = db.upsert_organization(
+            Organization(
+                name="Wellmont Holston Valley Medical Center",
+                normalized_name="wellmont holston valley medical center",
+                source="CMS",
+                source_id="1",
+            )
+        )
+        assert oid is not None
+        db.add_organization_alias(
+            oid,
+            "Holston Valley Medical Center",
+            "holston valley medical center",
+            source="wikidata",
+            confidence=IdentityConfidence.HIGH,
+        )
+        org = Organization(
+            organization_id=oid,
+            name="Wellmont Holston Valley Medical Center",
+            normalized_name="wellmont holston valley medical center",
+        )
+        assert get_candidate_keys(org, db) == [
+            "wellmont holston valley medical center",
+            "holston valley medical center",
+        ]
+
+    def test_medium_and_low_confidence_aliases_are_excluded(self, db: Database) -> None:
+        oid, _ = db.upsert_organization(
+            Organization(
+                name="Test Hospital", normalized_name="test hospital", source="CMS", source_id="1"
+            )
+        )
+        assert oid is not None
+        db.add_organization_alias(
+            oid, "Medium Alias", "medium alias", confidence=IdentityConfidence.MEDIUM
+        )
+        db.add_organization_alias(
+            oid, "Low Alias", "low alias", confidence=IdentityConfidence.LOW
+        )
+        db.add_organization_alias(
+            oid, "High Alias", "high alias", confidence=IdentityConfidence.HIGH
+        )
+        org = Organization(
+            organization_id=oid, name="Test Hospital", normalized_name="test hospital"
+        )
+        assert get_candidate_keys(org, db) == ["test hospital", "high alias"]
+
+    def test_an_alias_identical_to_the_organizations_own_name_is_not_duplicated(
+        self, db: Database
+    ) -> None:
+        oid, _ = db.upsert_organization(
+            Organization(
+                name="Test Hospital", normalized_name="test hospital", source="CMS", source_id="1"
+            )
+        )
+        assert oid is not None
+        db.add_organization_alias(
+            oid, "Test Hospital", "test hospital", confidence=IdentityConfidence.HIGH
+        )
+        org = Organization(
+            organization_id=oid, name="Test Hospital", normalized_name="test hospital"
+        )
+        assert get_candidate_keys(org, db) == ["test hospital"]
+
+    def test_organization_with_no_name_and_no_id_returns_an_empty_list(self) -> None:
+        org = Organization(organization_id=None, name=None, normalized_name=None)
+        # A fresh Database() would be needed to look up aliases, but there's
+        # no organization_id to look up in the first place - the function
+        # must short-circuit before ever touching the database.
+        assert get_candidate_keys(org, db=None) == []  # type: ignore[arg-type]

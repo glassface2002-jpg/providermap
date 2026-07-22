@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from .database import Database
-from .models import IdentityConfidence
+from .models import IdentityConfidence, Organization
 from .parser_utils import normalize_org_name
 from .wikidata_hospitals import _STATE_ABBR  # noqa: F401 - reused, not duplicated
 
@@ -295,3 +295,46 @@ def backfill_organization_aliases(
         "organizations_matched": orgs_matched,
         "aliases_added": aliases_added,
     }
+
+
+def get_candidate_keys(org: Organization, db: Database) -> list[str]:
+    """Every normalized name key worth trying when matching ``org`` against
+    a bulk source's index (Wikidata, HIFLD, VA, or any future source),
+    in priority order.
+
+    This is the single place cross-source matching's key-generation policy
+    lives (ROADMAP.md Phase 5.5) - a caller never hardcodes "own name plus
+    which alias tier" itself; it just iterates whatever this returns. Today
+    that policy is "the organization's own normalized name, then its
+    IdentityConfidence.HIGH aliases" (currently populated only by
+    :func:`backfill_organization_aliases`'s Wikidata pass - see
+    ``organization_aliases``), each state-then-name lookup stopping at the
+    first hit. MEDIUM/LOW-confidence aliases are deliberately excluded for
+    now: a lower-trust alias is a plausible source of a wrong cross-match in
+    some other source's index, and broadening this is a separate, measured
+    decision, not a default. Widening the confidence gate, adding a second
+    alias source, or reordering keys are all future changes that belong
+    here, not in any caller.
+
+    Own name is always first (never displaced by an alias) and never
+    duplicated if an alias happens to equal it or another alias verbatim.
+    Returns just the organization's own key (or an empty list, if the
+    organization has no derivable name at all) when it has no HIGH-confidence
+    aliases - callers see no behavior difference from before this function
+    existed in that case.
+    """
+    keys: list[str] = []
+    own_key = org.normalized_name or normalize_org_name(org.name)
+    if own_key:
+        keys.append(own_key)
+
+    if org.organization_id is not None:
+        for alias in db.get_aliases_for_organization(org.organization_id):
+            if (
+                alias.confidence == IdentityConfidence.HIGH
+                and alias.normalized_alias
+                and alias.normalized_alias not in keys
+            ):
+                keys.append(alias.normalized_alias)
+
+    return keys

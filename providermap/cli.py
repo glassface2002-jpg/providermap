@@ -502,10 +502,19 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     nothing about which website ends up on ``organizations.website``, the
     order sources are tried in, or any of the counters printed below - see
     ROADMAP.md's Phase 5.3 notes.
+
+    Each source is tried against every key ``identity_resolution.
+    get_candidate_keys`` returns for an organization - its own normalized
+    name first, then its known HIGH-confidence aliases (schema v7/Phase 5.5)
+    - not just its own name, so an organization already known by an alias
+    (e.g. from the Wikidata alias backfill) can match a source whose own
+    data uses that name instead of CMS's. This changes nothing about
+    promotion, reachability, confidence, or candidate-logging behavior -
+    only which name(s) get tried before falling through to the next source.
     """
     from .hifld_hospitals import fetch_hifld_hospital_index
+    from .identity_resolution import get_candidate_keys
     from .models import Confidence, ResolutionMethod
-    from .parser_utils import normalize_org_name
     from .va_facilities import fetch_va_facility_index
     from .website_enrichment import discover_website, http_domain_checker
     from .wikidata_hospitals import fetch_wikidata_hospital_websites
@@ -554,17 +563,21 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
         if org.organization_id is None:
             continue
 
-        key = org.normalized_name or normalize_org_name(org.name)
-        # State-keyed lookup first (disambiguates a name shared by hospitals
-        # in different states - see WikidataHospitalIndex), falling back to
-        # the plain name index for organizations whose state doesn't resolve
-        # to a Wikidata item.
+        candidate_keys = get_candidate_keys(org, db)
+        # Own name first, then HIGH-confidence aliases (see
+        # get_candidate_keys) - within each key, state-keyed lookup first
+        # (disambiguates a name shared by hospitals in different states -
+        # see WikidataHospitalIndex), falling back to the plain name index
+        # for organizations whose state doesn't resolve to a Wikidata item.
+        # Stops at the first hit across all keys.
         wiki_url = None
-        if key:
+        for candidate_key in candidate_keys:
             if org.state:
-                wiki_url = wikidata_index.by_name_state.get((key, org.state))
+                wiki_url = wikidata_index.by_name_state.get((candidate_key, org.state))
             if wiki_url is None:
-                wiki_url = wikidata_index.by_name.get(key)
+                wiki_url = wikidata_index.by_name.get(candidate_key)
+            if wiki_url:
+                break
         if wiki_url:
             db.set_organization_website(org.organization_id, wiki_url, Confidence.HIGH)
             db.add_website_candidate(
@@ -586,11 +599,13 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
         # HIFLD having stale data for an organization shouldn't cost it its
         # existing chance at a guessed match.
         hifld_url = None
-        if key:
+        for candidate_key in candidate_keys:
             if org.state:
-                hifld_url = hifld_index.by_name_state.get((key, org.state))
+                hifld_url = hifld_index.by_name_state.get((candidate_key, org.state))
             if hifld_url is None:
-                hifld_url = hifld_index.by_name.get(key)
+                hifld_url = hifld_index.by_name.get(candidate_key)
+            if hifld_url:
+                break
         if hifld_url is None:
             hifld_skipped += 1
         else:
@@ -626,11 +641,13 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
         # network call) when no va_api_key is configured, so this block is
         # a no-op cost-wise for anyone not using the source.
         va_url = None
-        if key:
+        for candidate_key in candidate_keys:
             if org.state:
-                va_url = va_index.by_name_state.get((key, org.state))
+                va_url = va_index.by_name_state.get((candidate_key, org.state))
             if va_url is None:
-                va_url = va_index.by_name.get(key)
+                va_url = va_index.by_name.get(candidate_key)
+            if va_url:
+                break
         if va_url is None:
             va_skipped += 1
         else:
