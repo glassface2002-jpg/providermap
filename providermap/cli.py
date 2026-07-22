@@ -487,8 +487,11 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     confirmed data, reported as ``Confidence.HIGH``), then HIFLD's Hospitals
     dataset (``providermap/hifld_hospitals.py`` - HIFLD's own data is
     measurably stale, so every candidate is reachability-checked before
-    being trusted, and stored only as ``Confidence.MEDIUM``), then falls
-    back to a best-effort name-guess (``providermap/website_enrichment.py``
+    being trusted, and stored only as ``Confidence.MEDIUM``), then the VA
+    Facilities API for VA-type organizations (``providermap/va_facilities.py``
+    - same reachability-gated, ``Confidence.MEDIUM`` discipline as HIFLD;
+    skipped entirely if no ``organizations.va_api_key`` is configured), then
+    falls back to a best-effort name-guess (``providermap/website_enrichment.py``
     - never authoritative, never ``Confidence.HIGH``) for whatever's still
     missing.
 
@@ -503,6 +506,7 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     from .hifld_hospitals import fetch_hifld_hospital_index
     from .models import Confidence, ResolutionMethod
     from .parser_utils import normalize_org_name
+    from .va_facilities import fetch_va_facility_index
     from .website_enrichment import discover_website, http_domain_checker
     from .wikidata_hospitals import fetch_wikidata_hospital_websites
 
@@ -520,6 +524,12 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     hifld_index = fetch_hifld_hospital_index(
         config.politeness.user_agent, config.organizations.hifld_fetch_timeout_seconds
     )
+    va_index = fetch_va_facility_index(
+        config.organizations.va_api_key,
+        config.organizations.va_facilities_base_url,
+        config.politeness.user_agent,
+        config.organizations.va_facilities_fetch_timeout_seconds,
+    )
 
     async def checker(url: str) -> str | None:
         return await http_domain_checker(
@@ -534,6 +544,11 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     hifld_unreachable = 0
     hifld_stored = 0
     hifld_skipped = 0
+    va_matched = 0
+    va_reachable = 0
+    va_unreachable = 0
+    va_stored = 0
+    va_skipped = 0
     found_guess = 0
     for org in orgs:
         if org.organization_id is None:
@@ -605,6 +620,46 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
                 promoted=False,
             )
 
+        # VA Facilities API - same state-then-name lookup shape and same
+        # reachability-gated, never-HIGH discipline as HIFLD (see
+        # va_facilities.py's module docstring). Empty (skipped without a
+        # network call) when no va_api_key is configured, so this block is
+        # a no-op cost-wise for anyone not using the source.
+        va_url = None
+        if key:
+            if org.state:
+                va_url = va_index.by_name_state.get((key, org.state))
+            if va_url is None:
+                va_url = va_index.by_name.get(key)
+        if va_url is None:
+            va_skipped += 1
+        else:
+            va_matched += 1
+            check_url = va_url if "://" in va_url else f"https://{va_url}"
+            if await checker(check_url) is not None:
+                va_reachable += 1
+                db.set_organization_website(
+                    org.organization_id, va_url, Confidence.MEDIUM, source="VA"
+                )
+                db.add_website_candidate(
+                    org.organization_id,
+                    va_url,
+                    ResolutionMethod.VA_API,
+                    reachable=True,
+                    confidence=Confidence.MEDIUM,
+                    promoted=True,
+                )
+                va_stored += 1
+                continue
+            va_unreachable += 1
+            db.add_website_candidate(
+                org.organization_id,
+                va_url,
+                ResolutionMethod.VA_API,
+                reachable=False,
+                promoted=False,
+            )
+
         url, confidence = await discover_website(
             org, checker, config.organizations.website_enrichment_requests_per_second
         )
@@ -631,6 +686,11 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     print(f"  hifld unreachable     : {hifld_unreachable}")
     print(f"  hifld stored          : {hifld_stored}")
     print(f"  hifld skipped (no match) : {hifld_skipped}")
+    print(f"  va matched            : {va_matched}")
+    print(f"  va reachable          : {va_reachable}")
+    print(f"  va unreachable        : {va_unreachable}")
+    print(f"  va stored             : {va_stored}")
+    print(f"  va skipped (no match) : {va_skipped}")
     print(f"  found via guessing    : {found_guess}")
     if args.dry_run:
         print(f"\n  {db.pending_writes} write operation(s) were rolled back.")

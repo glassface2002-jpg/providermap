@@ -159,6 +159,19 @@ class OrganizationsConfig:
     # refresh_older_than_days`'s convention on the provider side).
     website_recheck_after_days: int = 30
 
+    # `providermap enrich-organizations` also queries the VA Facilities API
+    # once per run (see providermap/va_facilities.py), between HIFLD and
+    # guessing - narrowly scoped to VA/DoD-type organizations. Unlike the
+    # other bulk sources, this one requires a credential: register a free
+    # sandbox key at https://developer.va.gov/explore/api/va-facilities/
+    # sandbox-access and set it here (never commit a real key - config.yaml
+    # is gitignored for exactly this reason, see .gitignore). `None` (the
+    # default) skips this source entirely rather than erroring - same
+    # graceful-skip contract as every other optional enrichment step.
+    va_api_key: str | None = None
+    va_facilities_base_url: str = "https://sandbox-api.va.gov/services/va_facilities/v1"
+    va_facilities_fetch_timeout_seconds: float = 30.0
+
 
 @dataclass
 class Config:

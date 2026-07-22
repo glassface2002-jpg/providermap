@@ -142,3 +142,13 @@ organizations:
   # for this many days - otherwise every enrich-organizations run re-guesses
   # domains for every hospital that has ever come up empty. 0 = always retry.
   website_recheck_after_days: 30
+
+  # `providermap enrich-organizations` also tries the VA Facilities API
+  # (see providermap/va_facilities.py) between HIFLD and guessing - narrowly
+  # scoped to VA-type organizations. null (default) skips this source
+  # entirely. To enable it: register a free sandbox key at
+  # https://developer.va.gov/explore/api/va-facilities/sandbox-access and
+  # set it here - never commit a real key (config.yaml is gitignored).
+  va_api_key: null
+  va_facilities_base_url: "https://sandbox-api.va.gov/services/va_facilities/v1"
+  va_facilities_fetch_timeout_seconds: 30.0
