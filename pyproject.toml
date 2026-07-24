@@ -45,6 +45,14 @@ dev = [
 render = [
     "playwright==1.61.0",
 ]
+# Only needed for `providermap refresh-osm-cache` (providermap/osm_hospitals.py)
+# - parsing the bulk Geofabrik .osm.pbf extract. Not needed for normal
+# `enrich-organizations` runs, which only read the small JSON cache that
+# command produces - hence a separate extra rather than a hard dependency:
+# install with `pip install -e ".[osm]"`.
+osm = [
+    "osmium==4.3.1",
+]
 
 [project.scripts]
 providermap = "providermap.cli:main"

@@ -172,6 +172,20 @@ class OrganizationsConfig:
     va_facilities_base_url: str = "https://sandbox-api.va.gov/services/va_facilities/v1"
     va_facilities_fetch_timeout_seconds: float = 30.0
 
+    # `providermap enrich-organizations` also consults a local OpenStreetMap
+    # hospital index (see providermap/osm_hospitals.py), between VA and
+    # guessing. Unlike Wikidata/HIFLD/VA, this source never calls a live API
+    # during enrich-organizations - Phase 6.0's validation measured the
+    # public Overpass API returning 504/429 errors under load on two
+    # separate instances, so it isn't something a production run should
+    # depend on. Instead, `providermap refresh-osm-cache` does a periodic,
+    # explicit, one-time bulk download+parse of a Geofabrik .osm.pbf extract
+    # into a small local JSON cache; enrich-organizations only ever reads
+    # that cache. `None` (the default) or a missing cache file skips this
+    # source entirely - same graceful-skip contract as VA.
+    osm_cache_path: str | None = None
+    osm_pbf_url: str = "https://download.geofabrik.de/north-america/us-latest.osm.pbf"
+
 
 @dataclass
 class Config:

@@ -152,3 +152,14 @@ organizations:
   va_api_key: null
   va_facilities_base_url: "https://sandbox-api.va.gov/services/va_facilities/v1"
   va_facilities_fetch_timeout_seconds: 30.0
+
+  # `providermap enrich-organizations` also consults a local OpenStreetMap
+  # hospital index (see providermap/osm_hospitals.py) between VA and
+  # guessing. This never calls a live API during enrichment - Phase 6.0
+  # measured the public Overpass API failing under load, so instead run
+  # `providermap refresh-osm-cache` periodically (a heavy, one-time bulk
+  # download of a ~12GB Geofabrik US extract) to build a small local JSON
+  # cache at osm_cache_path. null (default) or a missing cache file skips
+  # this source entirely.
+  osm_cache_path: null
+  osm_pbf_url: "https://download.geofabrik.de/north-america/us-latest.osm.pbf"

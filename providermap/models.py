@@ -347,19 +347,18 @@ class ResolutionMethod(str, Enum):
     answer "why did ProviderMap choose this website" without rerunning
     enrichment (schema v8).
 
-    Only ``WIKIDATA``, ``HIFLD``, and ``GUESS`` are produced by any code
-    today (Phase 5.3 wires candidate logging into the existing cascade,
-    nothing more). The rest of this vocabulary is defined now - it's a
-    stable, one-value-per-source-module set that shouldn't need widening
-    later - but stays unused until the sources they name (Phase 5.4's VA
-    resolver, Phase 5.5's search resolver, and identity-layer-driven
-    matching) actually exist.
+    ``WIKIDATA``, ``HIFLD``, ``VA_API``, ``GUESS``, and (Phase 6.1)
+    ``OSM`` are produced by live code. The rest of this vocabulary is
+    defined now - it's a stable, one-value-per-source-module set that
+    shouldn't need widening later - but stays unused until the sources they
+    name (a future search resolver, identity-layer-driven matching) exist.
     """
 
     WIKIDATA = "wikidata"
     HIFLD = "hifld"
     GUESS = "guess"
     VA_API = "va_api"
+    OSM = "osm"
     SEARCH_API = "search_api"
     SYSTEM_DOMAIN = "system_domain"
     ALIAS_MATCH = "alias_match"

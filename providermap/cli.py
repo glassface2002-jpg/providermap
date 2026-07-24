@@ -243,6 +243,30 @@ def cmd_export_organizations(config: Config, args: argparse.Namespace) -> None:
     db.close()
 
 
+def cmd_refresh_osm_cache(config: Config, args: argparse.Namespace) -> None:
+    """Rebuild the local OSM hospital cache ``enrich-organizations`` reads
+    (see ``providermap/osm_hospitals.py``). Heavy and explicit - downloads a
+    ~12GB Geofabrik US extract (unless ``--pbf-path`` points at one already
+    on disk) and streams through it once. Never run automatically by
+    ``enrich-organizations`` itself; re-run this periodically (weeks/months)
+    to pick up OSM's ongoing edits.
+    """
+    from .osm_hospitals import refresh_osm_cache
+
+    if not config.organizations.osm_cache_path:
+        print(
+            "\nSTOP: set organizations.osm_cache_path in config.yaml first "
+            "(where the built cache should be written).\n"
+        )
+        return
+
+    pbf_path = args.pbf_path or str(Path(config.organizations.osm_cache_path).with_suffix(".pbf"))
+    print(f"\nDownloading/parsing {config.organizations.osm_pbf_url} -> {pbf_path}")
+    print("(this can take a while - a ~12GB one-time/periodic download, not a per-run cost)\n")
+    count = refresh_osm_cache(config.organizations.osm_pbf_url, config.organizations.osm_cache_path, pbf_path)
+    print(f"Wrote {count} hospital records to {config.organizations.osm_cache_path}\n")
+
+
 def cmd_status(config: Config, args: argparse.Namespace) -> None:
     db = Database(db_path(config, args.test))
     c = db.counts()
@@ -487,13 +511,23 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     confirmed data, reported as ``Confidence.HIGH``), then HIFLD's Hospitals
     dataset (``providermap/hifld_hospitals.py`` - HIFLD's own data is
     measurably stale, so every candidate is reachability-checked before
-    being trusted, and stored only as ``Confidence.MEDIUM``), then the VA
-    Facilities API for VA-type organizations (``providermap/va_facilities.py``
-    - same reachability-gated, ``Confidence.MEDIUM`` discipline as HIFLD;
-    skipped entirely if no ``organizations.va_api_key`` is configured), then
-    falls back to a best-effort name-guess (``providermap/website_enrichment.py``
-    - never authoritative, never ``Confidence.HIGH``) for whatever's still
-    missing.
+    being trusted), then the VA Facilities API for VA-type organizations
+    (``providermap/va_facilities.py`` - same reachability-gated discipline
+    as HIFLD; skipped entirely if no ``organizations.va_api_key`` is
+    configured), then a local OpenStreetMap hospital cache
+    (``providermap/osm_hospitals.py`` - same reachability-gated discipline;
+    skipped entirely if no ``organizations.osm_cache_path`` is configured or
+    the cache file doesn't exist yet - see ``providermap refresh-osm-cache``),
+    then falls back to a best-effort name-guess
+    (``providermap/website_enrichment.py`` - never authoritative, never
+    ``Confidence.HIGH``) for whatever's still missing. HIFLD/VA/OSM/guessing
+    all use the same shared ``website_enrichment.page_matches_organization``
+    corroboration check on their already-fetched page content to choose
+    ``Confidence.MEDIUM`` (page mentions the org) vs ``Confidence.LOW`` (page
+    doesn't) - never HIGH, and never a rejection: a reachable candidate is
+    always stored regardless of whether the page happens to mention the
+    org's name (a renamed facility or health-system landing page can
+    legitimately fail that check and is still the right website).
 
     Every candidate this cascade considers - not just the one it promotes -
     is also logged to ``website_candidates`` (schema v8, see
@@ -515,8 +549,9 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     from .hifld_hospitals import fetch_hifld_hospital_index
     from .identity_resolution import get_candidate_keys
     from .models import Confidence, ResolutionMethod
+    from .osm_hospitals import fetch_osm_hospital_index
     from .va_facilities import fetch_va_facility_index
-    from .website_enrichment import discover_website, http_domain_checker
+    from .website_enrichment import discover_website, http_domain_checker, page_matches_organization
     from .wikidata_hospitals import fetch_wikidata_hospital_websites
 
     older_than = (
@@ -539,6 +574,7 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
         config.politeness.user_agent,
         config.organizations.va_facilities_fetch_timeout_seconds,
     )
+    osm_index = fetch_osm_hospital_index(config.organizations.osm_cache_path)
 
     async def checker(url: str) -> str | None:
         return await http_domain_checker(
@@ -553,11 +589,22 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     hifld_unreachable = 0
     hifld_stored = 0
     hifld_skipped = 0
+    hifld_medium = 0
+    hifld_low = 0
     va_matched = 0
     va_reachable = 0
     va_unreachable = 0
     va_stored = 0
     va_skipped = 0
+    va_medium = 0
+    va_low = 0
+    osm_matched = 0
+    osm_reachable = 0
+    osm_unreachable = 0
+    osm_stored = 0
+    osm_skipped = 0
+    osm_medium = 0
+    osm_low = 0
     found_guess = 0
     for org in orgs:
         if org.organization_id is None:
@@ -611,17 +658,29 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
         else:
             hifld_matched += 1
             check_url = hifld_url if "://" in hifld_url else f"https://{hifld_url}"
-            if await checker(check_url) is not None:
+            html = await checker(check_url)
+            if html is not None:
                 hifld_reachable += 1
+                # page_matches_organization is corroborating evidence for the
+                # confidence tier, never a rejection gate - a renamed
+                # facility, a health-system landing page, or a JS-rendered
+                # site can all legitimately fail this check and are still
+                # stored (see website_enrichment.py's docstring).
+                if page_matches_organization(html, org.name):
+                    hifld_confidence = Confidence.MEDIUM
+                    hifld_medium += 1
+                else:
+                    hifld_confidence = Confidence.LOW
+                    hifld_low += 1
                 db.set_organization_website(
-                    org.organization_id, hifld_url, Confidence.MEDIUM, source="HIFLD"
+                    org.organization_id, hifld_url, hifld_confidence, source="HIFLD"
                 )
                 db.add_website_candidate(
                     org.organization_id,
                     hifld_url,
                     ResolutionMethod.HIFLD,
                     reachable=True,
-                    confidence=Confidence.MEDIUM,
+                    confidence=hifld_confidence,
                     promoted=True,
                 )
                 hifld_stored += 1
@@ -653,17 +712,24 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
         else:
             va_matched += 1
             check_url = va_url if "://" in va_url else f"https://{va_url}"
-            if await checker(check_url) is not None:
+            html = await checker(check_url)
+            if html is not None:
                 va_reachable += 1
+                if page_matches_organization(html, org.name):
+                    va_confidence = Confidence.MEDIUM
+                    va_medium += 1
+                else:
+                    va_confidence = Confidence.LOW
+                    va_low += 1
                 db.set_organization_website(
-                    org.organization_id, va_url, Confidence.MEDIUM, source="VA"
+                    org.organization_id, va_url, va_confidence, source="VA"
                 )
                 db.add_website_candidate(
                     org.organization_id,
                     va_url,
                     ResolutionMethod.VA_API,
                     reachable=True,
-                    confidence=Confidence.MEDIUM,
+                    confidence=va_confidence,
                     promoted=True,
                 )
                 va_stored += 1
@@ -673,6 +739,55 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
                 org.organization_id,
                 va_url,
                 ResolutionMethod.VA_API,
+                reachable=False,
+                promoted=False,
+            )
+
+        # OSM - same state-then-name lookup shape and same reachability-gated,
+        # never-HIGH discipline as HIFLD/VA (see osm_hospitals.py's module
+        # docstring). Empty (skipped without a network call - this index is
+        # loaded from a local cache file, never fetched live here) when no
+        # osm_cache_path is configured or the cache doesn't exist yet.
+        osm_url = None
+        for candidate_key in candidate_keys:
+            if org.state:
+                osm_url = osm_index.by_name_state.get((candidate_key, org.state))
+            if osm_url is None:
+                osm_url = osm_index.by_name.get(candidate_key)
+            if osm_url:
+                break
+        if osm_url is None:
+            osm_skipped += 1
+        else:
+            osm_matched += 1
+            check_url = osm_url if "://" in osm_url else f"https://{osm_url}"
+            html = await checker(check_url)
+            if html is not None:
+                osm_reachable += 1
+                if page_matches_organization(html, org.name):
+                    osm_confidence = Confidence.MEDIUM
+                    osm_medium += 1
+                else:
+                    osm_confidence = Confidence.LOW
+                    osm_low += 1
+                db.set_organization_website(
+                    org.organization_id, osm_url, osm_confidence, source="OSM"
+                )
+                db.add_website_candidate(
+                    org.organization_id,
+                    osm_url,
+                    ResolutionMethod.OSM,
+                    reachable=True,
+                    confidence=osm_confidence,
+                    promoted=True,
+                )
+                osm_stored += 1
+                continue
+            osm_unreachable += 1
+            db.add_website_candidate(
+                org.organization_id,
+                osm_url,
+                ResolutionMethod.OSM,
                 reachable=False,
                 promoted=False,
             )
@@ -702,12 +817,20 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     print(f"  hifld reachable       : {hifld_reachable}")
     print(f"  hifld unreachable     : {hifld_unreachable}")
     print(f"  hifld stored          : {hifld_stored}")
+    print(f"    (page-matched -> MEDIUM: {hifld_medium}, no match -> LOW: {hifld_low})")
     print(f"  hifld skipped (no match) : {hifld_skipped}")
     print(f"  va matched            : {va_matched}")
     print(f"  va reachable          : {va_reachable}")
     print(f"  va unreachable        : {va_unreachable}")
     print(f"  va stored             : {va_stored}")
+    print(f"    (page-matched -> MEDIUM: {va_medium}, no match -> LOW: {va_low})")
     print(f"  va skipped (no match) : {va_skipped}")
+    print(f"  osm matched            : {osm_matched}")
+    print(f"  osm reachable          : {osm_reachable}")
+    print(f"  osm unreachable        : {osm_unreachable}")
+    print(f"  osm stored             : {osm_stored}")
+    print(f"    (page-matched -> MEDIUM: {osm_medium}, no match -> LOW: {osm_low})")
+    print(f"  osm skipped (no match) : {osm_skipped}")
     print(f"  found via guessing    : {found_guess}")
     if args.dry_run:
         print(f"\n  {db.pending_writes} write operation(s) were rolled back.")
@@ -877,6 +1000,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("export-organizations", help="write organizations.xlsx")
 
+    p = sub.add_parser(
+        "refresh-osm-cache",
+        help="rebuild the local OSM hospital cache from a Geofabrik .osm.pbf extract "
+        "(heavy, ~12GB download - run occasionally, never automatically)",
+    )
+    p.add_argument(
+        "--pbf-path",
+        default=None,
+        help="path to an already-downloaded .osm.pbf (default: download to a temp file "
+        "next to the cache)",
+    )
+
     return ap
 
 
@@ -939,6 +1074,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_link_organizations(config, args)
     elif args.cmd == "export-organizations":
         cmd_export_organizations(config, args)
+    elif args.cmd == "refresh-osm-cache":
+        cmd_refresh_osm_cache(config, args)
 
 
 if __name__ == "__main__":

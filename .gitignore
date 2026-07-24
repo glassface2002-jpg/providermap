@@ -13,9 +13,15 @@ config.yaml
 
 # Data. The whole point of this repo is the pipeline that produces these,
 # not the outputs of any one person's run - none of it belongs in git.
-database/*.db
-database/*.db-wal
-database/*.db-shm
+# Broad on purpose (not just database/*.db) so a timestamped backup file
+# like database/providermap.db.backup-<ts> is never missed just because its
+# suffix isn't literally ".db".
+database/
+*.db
+*.db-*
+*.db.backup*
+*.sqlite
+*.sqlite3
 .cache/
 
 # Generated exports
