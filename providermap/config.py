@@ -188,6 +188,98 @@ class OrganizationsConfig:
 
 
 @dataclass
+class ProvidersConfig:
+    """Settings for provider *dataset/API* adapters (see
+    ``adapters/providers/base_dataset.py``) - as opposed to
+    ``site``/``SiteConfig``, which configures the scraped-directory pipeline.
+
+    Flat rather than nested per-adapter, matching :class:`OrganizationsConfig`'s
+    convention - add a second key when a second provider dataset adapter
+    needs one.
+    """
+
+    # Cigna's public FHIR R4 Provider Directory (Da Vinci PDex Plan-Net) -
+    # see adapters/providers/cigna_fhir/adapter.py. No auth required.
+    cigna_fhir_base_url: str = "https://fhir.cigna.com/ProviderDirectory/v1"
+
+    # Two-letter state code (e.g. "CT") to scope a `providermap
+    # ingest-providers` pilot run to one state via the Plan-Net
+    # `location.address-state` search parameter. `None` (the default) means
+    # unscoped - never use that for a real run without deliberately opting
+    # in, since Cigna's directory is national.
+    cigna_fhir_state: str | None = None
+
+    cigna_fhir_page_size: int = 50
+    cigna_fhir_fetch_timeout_seconds: float = 30.0
+
+    # NPPES enrichment for Cigna-sourced providers is off by default: the
+    # FHIR response already carries NPI/name/taxonomy, and NPPES is the
+    # pipeline's main runtime cost driver (see NppesConfig). Opt in to
+    # compare against the FHIR-only pilot numbers.
+    cigna_fhir_use_nppes: bool = False
+
+    # Durable resume support (see providermap/checkpoint.py) - a dedicated
+    # SQLite file, separate from database.path, tracking which fetch phases/
+    # batches a provider dataset adapter has already completed. `None` (the
+    # default) disables checkpointing entirely - a run behaves exactly as it
+    # did before this existed. Set a path (e.g. "database/checkpoints.db")
+    # before any run expected to take hours, so it can survive an
+    # interruption without re-fetching everything already done.
+    checkpoint_path: str | None = None
+
+    # Bounded concurrency for the PractitionerRole batch phase only (see
+    # adapters/providers/cigna_fhir/CONCURRENCY_DESIGN.md) - the Location
+    # phase and the unscoped PractitionerRole search stay sequential
+    # regardless of this setting, since both paginate via an opaque
+    # continuation token that can't be parallelized. `1` (the default)
+    # reproduces the original fully-sequential behavior exactly - this is
+    # also what the "concurrency on vs. off produce identical output"
+    # regression test pins as the baseline. Raise it only for a run where
+    # the measured, sequential runtime is already known to be a problem.
+    cigna_fhir_max_concurrent_requests: int = 1
+
+    # A token-bucket cap on how fast new batch requests are dispatched,
+    # independent of cigna_fhir_max_concurrent_requests (which only bounds
+    # how many are in flight at once) - see the design doc's "configurable
+    # throttling" section for why both knobs are needed.
+    cigna_fhir_requests_per_second: float = 5.0
+
+    # Which DiscoveryStrategy CignaFhirAdapter.discover() delegates to (see
+    # adapters/providers/cigna_fhir/discovery.py and
+    # NATIONAL_DISCOVERY_DESIGN.md). "state_scoped" (the default) reproduces
+    # the original, only-ever-existing behavior exactly - a
+    # Location-enumeration-then-batch fetch scoped to cigna_fhir_state (or a
+    # single unscoped PractitionerRole walk if that's unset). "national" is
+    # a memory-bounded, spool-backed strategy (see resource_spool_path
+    # below) - implemented, but per the approved design's migration
+    # discipline this default does not change until a production-quality
+    # national ingestion has completed successfully and its operational
+    # characteristics have been verified. See the ADR for why that's a
+    # separate, later decision from "is the code correct".
+    cigna_fhir_discovery_mode: str = "state_scoped"
+
+    # Only read by the "national" discovery strategy - a dedicated SQLite
+    # file, separate from database.path, that every fetched FHIR resource is
+    # spooled to instead of an in-memory cache (see
+    # providermap/resource_spool.py). `None` (the default) means national
+    # mode isn't usable yet - selecting it without a path set raises rather
+    # than silently falling back to the unbounded in-memory cache this
+    # strategy exists specifically to avoid.
+    resource_spool_path: str | None = None
+
+    # National discovery partitions its unscoped PractitionerRole walk into
+    # `_lastUpdated` windows, each `cigna_fhir_window_days` wide, covering
+    # the last `cigna_fhir_lookback_days`. Both bounds are documented
+    # defaults, not measured ones - the calibration probe (a later,
+    # separate step) is what right-sizes them against real data. Both ends
+    # of the walk stay open regardless of these values (see
+    # discovery.py::_generate_lastupdated_windows), so a resource older than
+    # the lookback, or newer than "now", is never silently missed.
+    cigna_fhir_window_days: int = 30
+    cigna_fhir_lookback_days: int = 3650
+
+
+@dataclass
 class Config:
     """The full, typed configuration tree, mirroring ``config.yaml``."""
 
@@ -204,6 +296,7 @@ class Config:
     incremental: IncrementalConfig
     exports: ExportsConfig
     organizations: OrganizationsConfig
+    providers: ProvidersConfig
 
 
 def load_config(path: str | Path = "config.yaml") -> Config:
@@ -235,6 +328,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         incremental=IncrementalConfig(**raw.get("incremental", {})),
         exports=ExportsConfig(**raw.get("exports", {})),
         organizations=OrganizationsConfig(**raw.get("organizations", {})),
+        providers=ProvidersConfig(**raw.get("providers", {})),
     )
     _apply_env_overrides(cfg)
     return cfg

@@ -20,9 +20,11 @@ from pathlib import Path
 from adapters import (
     ADAPTERS,
     ORGANIZATION_ADAPTERS,
+    PROVIDER_DATASET_ADAPTERS,
     SiteAdapter,
     get_adapter_class,
     get_organization_adapter_class,
+    get_provider_dataset_adapter_class,
 )
 
 from . import discover as discovery
@@ -503,6 +505,230 @@ def cmd_ingest_organizations(config: Config, args: argparse.Namespace) -> None:
     db.close()
 
 
+def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
+    """Import one provider *dataset/API* source (e.g. Cigna's FHIR Provider
+    Directory) into ``providers``/``locations``/``organizations`` - the
+    counterpart to ``ingest-organizations``, but for provider-shaped sources
+    (see ``adapters/providers/base_dataset.py``).
+
+    Every write goes through the same ``Database`` methods the scraped
+    AdventHealth pipeline uses (NPI-first dedupe via ``upsert_provider``,
+    ``upsert_location``, ``link``, ``upsert_organization``,
+    ``link_provider_organization``) - nothing here is a new persistence path.
+
+    Cigna enriches, it does not overwrite: a practitioner whose NPI already
+    exists in ``providers`` (from AdventHealth or a prior Cigna run) is left
+    exactly as-is - only the new location/organization *relationships* Cigna
+    reveals are added. Only a genuinely new NPI gets a full
+    ``upsert_provider`` insert. This is deliberately different from
+    ``cmd_ingest_organizations``, which always calls ``upsert_organization``
+    (organizations have no content-hash/"don't overwrite" concept yet) - see
+    the plan file for why providers and organizations differ here.
+    """
+    from dataclasses import replace
+
+    from .checkpoint import CheckpointStore
+    from .validator import validate_provider
+
+    # Per-run override, e.g. `--discovery-mode national` for a deliberate
+    # one-off national pass without editing config.yaml - config.py's
+    # documented migration discipline still applies: the *default* (when
+    # this flag is omitted) stays whatever config.yaml says, itself
+    # state_scoped unless someone has already made that separate, reviewed
+    # decision.
+    if getattr(args, "discovery_mode", None):
+        config.providers.cigna_fhir_discovery_mode = args.discovery_mode
+
+    adapter_cls = get_provider_dataset_adapter_class(args.provider_adapter)
+    # None (the default) disables checkpointing entirely - existing behavior,
+    # unchanged. Set providers.checkpoint_path before a run expected to take
+    # hours, so it can survive an interruption without re-fetching everything.
+    checkpoint_store = (
+        CheckpointStore(config.providers.checkpoint_path)
+        if config.providers.checkpoint_path
+        else None
+    )
+    adapter = adapter_cls(config, checkpoint_store=checkpoint_store)
+
+    # Same NpiPolicy the scraped-website pipeline uses, except for
+    # require_profile_url: a provider dataset source identifies practitioners
+    # by NPI/FHIR id, not a profile page, so its adapters declare that they
+    # don't have one (see ProviderDatasetAdapter.requires_profile_url) rather
+    # than this call site or the validator special-casing "dataset sources".
+    npi_policy = replace(config.npi, require_profile_url=adapter.requires_profile_url)
+
+    db = Database(db_path(config, False), dry_run=args.dry_run)
+    log = logging.getLogger(__name__)
+
+    # Same runs-table lifecycle every other command uses (start_run/
+    # finish_run) - so `providermap status`/`changes` see dataset-adapter
+    # runs the same way they see scrape/discover/trial runs, without
+    # database.py needing to know "ingest-providers" exists.
+    db.start_run(mode="dry-run" if args.dry_run else "ingest-providers", source_used=adapter.name)
+
+    tally = {
+        "practitioners_discovered": 0,
+        "new_npis": 0,
+        "existing_npis": 0,
+        "excluded": 0,
+        "errors": 0,
+    }
+    seen_location_keys: set[str] = set()
+    seen_org_keys: set[tuple[str | None, str | None]] = set()
+    started_at = datetime.now(timezone.utc)
+
+    for raw in adapter.discover():
+        try:
+            normalized = adapter.normalize(adapter.extract(raw))
+        except Exception:
+            tally["errors"] += 1
+            log.exception("Failed to process one %s record", adapter.name)
+            continue
+
+        tally["practitioners_discovered"] += 1
+        provider = normalized.provider
+
+        is_valid, problems = validate_provider(provider, npi_policy)
+        if not is_valid:
+            tally["excluded"] += 1
+            log.info(
+                "Excluding %s provider %s: %s",
+                adapter.name,
+                provider.npi or provider.full_name,
+                "; ".join(problems),
+            )
+            continue
+
+        existing = db.get_provider(npi=provider.npi) if provider.npi else None
+        if existing is None:
+            provider_id, _ = db.upsert_provider(provider)
+            tally["new_npis"] += 1
+        else:
+            # Known NPI: leave the existing provider row untouched - Cigna
+            # only contributes the location/organization links below.
+            provider_id = existing.provider_id
+            tally["existing_npis"] += 1
+
+        for i, loc in enumerate(normalized.locations):
+            if loc.address_key not in seen_location_keys:
+                seen_location_keys.add(loc.address_key)
+            location_id = db.upsert_location(loc)
+            if provider_id is not None and location_id is not None:
+                # enrich_only=True: this source's own discovery may be
+                # scope-limited (see CignaFhirAdapter's state_scoped vs
+                # national modes) - a later, differently-scoped pass must
+                # only ever add relationships, never re-litigate which
+                # location is already primary (Risk R1, see
+                # Database.link()'s docstring).
+                db.link(provider_id, location_id, is_primary=(i == 0), enrich_only=True)
+
+        for org, _relationship in normalized.organizations:
+            org_key = (org.source, org.source_id)
+            if org_key not in seen_org_keys:
+                seen_org_keys.add(org_key)
+            organization_id, _ = db.upsert_organization(org)
+            if provider_id is not None and organization_id is not None:
+                db.link_provider_organization(provider_id, organization_id, source=adapter.source)
+
+    runtime_seconds = (datetime.now(timezone.utc) - started_at).total_seconds()
+    request_count = getattr(adapter, "last_request_count", None)
+    stats = getattr(adapter, "last_discovery_stats", None)
+
+    # Reuses the existing generic runs columns rather than adding
+    # dataset-adapter-specific ones: urls_discovered/providers_new/
+    # providers_changed map onto practitioners discovered/new NPIs/existing
+    # NPIs, and whatever has no matching column (locations/organizations
+    # discovered, request count) goes in notes - the same "no dedicated
+    # column, use notes" convention finish_run's other call sites already
+    # follow.
+    db.finish_run(
+        urls_discovered=tally["practitioners_discovered"],
+        providers_new=tally["new_npis"],
+        providers_changed=tally["existing_npis"],
+        excluded=tally["excluded"],
+        errors=tally["errors"],
+        source_used=adapter.name,
+        notes=(
+            f"locations={len(seen_location_keys)} organizations={len(seen_org_keys)} "
+            f"requests={request_count} runtime={runtime_seconds:.1f}s"
+        )[:200],
+    )
+
+    banner = "DRY RUN - nothing was written" if args.dry_run else "Done"
+    print(f"\n{banner}. Source: {adapter.name} ({adapter.source})")
+    print(f"  practitioners discovered : {tally['practitioners_discovered']}")
+    print(f"  new NPIs                 : {tally['new_npis']}")
+    print(f"  existing NPIs            : {tally['existing_npis']}")
+    print(f"  locations discovered     : {len(seen_location_keys)}")
+    print(f"  organizations discovered : {len(seen_org_keys)}")
+    print(f"  excluded                 : {tally['excluded']}")
+    print(f"  errors                   : {tally['errors']}")
+    print(f"  runtime                  : {runtime_seconds:.1f}s")
+    if request_count is not None:
+        print(f"  API requests             : {request_count}")
+
+    # Optional, richer profiling breakdown - only adapters that opt in (see
+    # adapters/providers/cigna_fhir/adapter.py::DiscoveryStats) expose this;
+    # cli.py stays adapter-agnostic via getattr, same as last_request_count.
+    if stats is not None:
+        print("\n  --- request profile ---")
+        print(f"  requests by endpoint     : {dict(stats.requests_by_endpoint)}")
+        print(f"  continuation requests    : {stats.continuation_requests}")
+        print(f"  resources seen by type   : {dict(stats.resources_seen_by_type)}")
+        print(f"  duplicate resources      : {dict(stats.duplicate_resources_by_type)}")
+        print(f"  reference hits / misses  : {stats.reference_hits} / {stats.reference_misses}")
+        print(f"  retry count              : {stats.retry_count}")
+        avg = stats.average_latency_seconds
+        print(f"  avg request latency      : {avg:.3f}s" if avg is not None else "  avg request latency      : n/a")
+        print(f"  discover() runtime       : {stats.runtime_seconds:.1f}s")
+        if stats.failed_batches:
+            print(f"  failed batches           : {len(stats.failed_batches)} (see logs for details)")
+
+        # Correctness instrumentation - separate from the profiling numbers
+        # above, which are about cost. These are about whether the run's
+        # data can be trusted. See DiscoveryStats.suspected_silent_failure
+        # for why role_queries_empty being large is expected and NOT a
+        # failure signal, while total:0 or an abnormal enumeration ending
+        # is.
+        print("\n  --- discovery completeness ---")
+        if stats.location_enumeration_completed_normally is None:
+            enum_status = "not verified this run (checkpoint hit or unscoped mode)"
+        elif stats.location_enumeration_completed_normally:
+            enum_status = f"ended normally ({stats.location_enumeration_pages} pages)"
+        else:
+            enum_status = f"DID NOT END NORMALLY ({stats.location_enumeration_pages} pages)"
+        print(f"  location enumeration     : {enum_status}")
+        print(
+            f"  role queries             : {stats.role_queries_attempted} attempted, "
+            f"{stats.role_queries_empty} empty"
+        )
+        total_zero = dict(stats.bundles_with_total_zero_by_endpoint)
+        print(f"  bundles with total:0     : {total_zero if total_zero else 'none'}")
+        roles = stats.distinct_resources_by_type.get("PractitionerRole", 0)
+        print(
+            f"  distinct roles / providers / relationships : "
+            f"{roles} / {stats.providers_yielded} / "
+            f"{stats.provider_location_relationships_discovered}"
+        )
+        if stats.suspected_silent_failure:
+            print("  *** SILENT FAILURE SIGNATURE(S) DETECTED - this run's data may be incomplete ***")
+        else:
+            print("  no silent-failure signatures detected")
+
+    if args.dry_run:
+        print(f"\n  {db.pending_writes} write operation(s) were rolled back.")
+    print()
+    db.close()
+    if checkpoint_store is not None:
+        checkpoint_store.close()
+    # Only the "national" strategy's adapter exposes this (see
+    # CignaFhirAdapter.__init__) - getattr keeps this command adapter-
+    # agnostic, same convention as last_request_count/last_discovery_stats.
+    resource_spool = getattr(adapter, "resource_spool", None)
+    if resource_spool is not None:
+        resource_spool.close()
+
+
 async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> None:
     """Website discovery for organizations that don't have one yet.
 
@@ -974,6 +1200,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p = sub.add_parser(
+        "ingest-providers",
+        help="import one provider dataset/API source (e.g. Cigna FHIR Provider Directory)",
+    )
+    p.add_argument(
+        "--provider-adapter",
+        default="cigna_fhir",
+        choices=sorted(PROVIDER_DATASET_ADAPTERS),
+        help="which provider dataset adapter to use (default: cigna_fhir)",
+    )
+    p.add_argument(
+        "--discovery-mode",
+        default=None,
+        choices=["state_scoped", "national"],
+        help=(
+            "override providers.cigna_fhir_discovery_mode for this run only "
+            "(default: use whatever config.yaml sets, itself state_scoped "
+            "unless changed - see NATIONAL_DISCOVERY_DESIGN.md's migration "
+            "discipline before ever setting this to national)"
+        ),
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="do everything, write nothing (rolled back)"
+    )
+
+    p = sub.add_parser(
         "enrich-organizations",
         help="best-effort website discovery for organizations missing one",
     )
@@ -1068,6 +1319,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_query(config, args)
     elif args.cmd == "ingest-organizations":
         cmd_ingest_organizations(config, args)
+    elif args.cmd == "ingest-providers":
+        cmd_ingest_providers(config, args)
     elif args.cmd == "enrich-organizations":
         asyncio.run(cmd_enrich_organizations(config, args))
     elif args.cmd == "link-organizations":

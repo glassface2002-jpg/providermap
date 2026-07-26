@@ -75,18 +75,33 @@ class UpsertOutcome(str, Enum):
 
 @dataclass(frozen=True)
 class NpiPolicy:
-    """How strict to be about NPIs.
+    """The record-completeness policy :func:`~providermap.validator.validate_provider`
+    checks against - how strict to be about NPIs, plus the one non-NPI
+    completeness rule (``require_profile_url``) that turned out to need the
+    same per-source flexibility.
 
     See ``config.example.yaml`` for the user-facing documentation of each
     field; this is its typed counterpart. The pipeline is designed to produce
     a usable dataset even with NPPES switched off entirely
     (``require_nppes=False``, the default) - every degradation is recorded on
     the :class:`Provider` it affects rather than silently assumed away.
+
+    ``require_profile_url`` defaults to ``True`` - the website-scraping
+    pipeline (``adapters.base.SiteAdapter`` sources, e.g. AdventHealth)
+    identifies a provider by their profile page, so a record with none is
+    genuinely incomplete there. A provider *dataset* source (see
+    ``adapters/providers/base_dataset.py``) identifies a provider by a stable
+    id (NPI/FHIR id) instead and has no such page at all; ``cmd_ingest_providers``
+    builds a copy of this policy with ``require_profile_url=False`` for those
+    adapters (see ``ProviderDatasetAdapter.requires_profile_url``), rather
+    than this module or the validator knowing anything about *why* - the
+    policy is what's source-specific, not the validation logic itself.
     """
 
     checksum: str = "warn"  # "strict" | "warn" | "off"
     require_npi: bool = True
     require_nppes: bool = False
+    require_profile_url: bool = True
 
     def __post_init__(self) -> None:
         if self.checksum not in {"strict", "warn", "off"}:

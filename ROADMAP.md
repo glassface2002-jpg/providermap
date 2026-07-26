@@ -151,3 +151,36 @@ providermap/
 ├── website_enrichment.py    best-effort website discovery - stage 4 ✓
 └── organization_linking.py  exact-match provider<->org linking - stage 5 ✓
 ```
+
+## Provider dataset adapters
+
+A third adapter family, alongside `SiteAdapter` and `OrganizationAdapter`:
+`adapters.providers.base_dataset.ProviderDatasetAdapter` (registry:
+`PROVIDER_DATASET_ADAPTERS`), for *provider* sources that are a structured
+dataset/API rather than a website to scrape — the same "different shape for
+a different kind of source" reasoning stage 3 already applied on the
+organization side.
+
+`adapters/providers/cigna_fhir/` is the first concrete instance: Cigna's
+public FHIR R4 Provider Directory (Da Vinci PDex Plan-Net, mandated under
+CMS-9115-F). Built and hardened in stages, each measured against the live
+API rather than assumed:
+
+- **State-scoped discovery** *(shipped)* — `Location?address-state=X` →
+  batched `PractitionerRole?location=`, with checkpoint/resume and bounded
+  concurrency. Verified end-to-end in staging: correct inserts/updates,
+  enrichment-only behavior (an existing NPI is never overwritten), idempotent
+  relationship linking.
+- **National discovery** *(designed, not yet implemented — see
+  `adapters/providers/cigna_fhir/NATIONAL_DISCOVERY_DESIGN.md` and
+  `docs/adr/0001-national-discovery-strategy.md`)* — state-scoped enumeration
+  was measured hitting a hard wall at national scale (a single mid-size
+  state exhausted 3.87 GB of memory without finishing). The approved
+  redesign walks `PractitionerRole` unscoped instead, behind a package-local
+  `DiscoveryStrategy` abstraction, retaining state-scoped as the targeted
+  refresh/troubleshooting mode rather than replacing it.
+
+See `docs/adr/` for the durable decision record this work produced, and
+`adapters/providers/cigna_fhir/evidence/` for the measured numbers (both
+Rhode Island and Florida staging runs, and the live FHIR capability probes)
+that drove it.

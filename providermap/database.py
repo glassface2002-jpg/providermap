@@ -1001,8 +1001,60 @@ class Database:
         return cur.lastrowid
 
     def link(
-        self, provider_id: int, location_id: int, is_primary: bool = False, rank: int = 0
+        self,
+        provider_id: int,
+        location_id: int,
+        is_primary: bool = False,
+        rank: int = 0,
+        enrich_only: bool = False,
     ) -> None:
+        """Link a provider to a location.
+
+        ``enrich_only`` (default ``False`` - every existing caller is
+        unaffected) mirrors ``upsert_provider``'s enrichment-only contract
+        for the ``providers`` table, applied here to the *relationship*:
+        an already-recorded ``(provider_id, location_id)`` pair has its
+        ``is_primary``/``rank`` left exactly as first established (only
+        ``is_active`` is refreshed), and a brand-new pair is never allowed
+        to claim ``is_primary=True`` out from under a primary location the
+        provider already has. Without this, a source whose own discovery
+        is scope-limited (e.g. one state) could seed a provider's primary
+        location, and a later, differently-scoped pass from the *same*
+        source (e.g. a national pass, seeing more of that provider's
+        locations) could silently flip which location is flagged primary
+        here while ``providers.address`` - protected by the caller's own
+        enrichment-only convention - stays put, leaving the two
+        disagreeing about the same provider's primary location. See
+        ``adapters/providers/cigna_fhir/NATIONAL_DISCOVERY_DESIGN.md``'s
+        Risk R1 for the finding that surfaced this.
+
+        Default ``False`` reproduces prior behavior exactly - callers that
+        legitimately need to change which location is primary (e.g.
+        ``pipeline.py``, when a scraped provider's practice location
+        genuinely changes between runs) do not pass this and are
+        unaffected.
+        """
+        if enrich_only:
+            existing = self.conn.execute(
+                "SELECT 1 FROM provider_locations WHERE provider_id=? AND location_id=?",
+                (provider_id, location_id),
+            ).fetchone()
+            if existing is not None:
+                self.conn.execute(
+                    "UPDATE provider_locations SET is_active=1 "
+                    "WHERE provider_id=? AND location_id=?",
+                    (provider_id, location_id),
+                )
+                self._commit()
+                return
+            if is_primary:
+                has_primary = self.conn.execute(
+                    "SELECT 1 FROM provider_locations WHERE provider_id=? AND is_primary=1",
+                    (provider_id,),
+                ).fetchone()
+                if has_primary is not None:
+                    is_primary = False
+
         self.conn.execute(
             "INSERT OR REPLACE INTO provider_locations "
             "(provider_id, location_id, is_primary, rank, is_active) VALUES (?, ?, ?, ?, 1)",

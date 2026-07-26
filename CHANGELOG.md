@@ -9,6 +9,24 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **National discovery architecture for the Cigna FHIR provider dataset
+  adapter (design only, not implemented)** - `adapters/providers/cigna_fhir/`
+  ships a working, production-verified **state-scoped** discovery strategy
+  (`Location?address-state=X` → batched `PractitionerRole` lookups, with
+  checkpoint/resume and bounded concurrency), but staging measurements found
+  it hits a hard wall at national scale: a single mid-size state exhausted
+  3.87 GB of memory without finishing enumeration, because ~98% of
+  enumerated locations turn out to have no practitioner attached. Live
+  probing of Cigna's FHIR capabilities (not spec assumption) confirmed an
+  unscoped `PractitionerRole` traversal avoids that enumeration entirely and
+  returns the complete relationship graph, at the cost of differing
+  completeness from the state-scoped path in a specific, now-documented way.
+  See `adapters/providers/cigna_fhir/NATIONAL_DISCOVERY_DESIGN.md` and the
+  project's first Architecture Decision Record,
+  [`docs/adr/0001-national-discovery-strategy.md`](docs/adr/0001-national-discovery-strategy.md),
+  for the full design, the evidence behind it, and the validation plan
+  gating any implementation. No code from this design has been implemented
+  yet - the existing state-scoped adapter is unaffected.
 - **`providermap export-organizations`** - a fourth workbook,
   `organizations.xlsx`, alongside the three `providermap export` already
   writes. One row per organization plus a linked-provider count (from

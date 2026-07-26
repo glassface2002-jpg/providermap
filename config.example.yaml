@@ -163,3 +163,70 @@ organizations:
   # this source entirely.
   osm_cache_path: null
   osm_pbf_url: "https://download.geofabrik.de/north-america/us-latest.osm.pbf"
+
+# Provider *dataset/API* adapters (see adapters/providers/base_dataset.py) -
+# as opposed to `site` above, which configures the scraped-directory
+# pipeline. `providermap ingest-providers` uses this section.
+providers:
+  # Cigna's public FHIR R4 Provider Directory (Da Vinci PDex Plan-Net) - no
+  # auth required. See adapters/providers/cigna_fhir/adapter.py.
+  cigna_fhir_base_url: "https://fhir.cigna.com/ProviderDirectory/v1"
+
+  # Two-letter state code (e.g. "CT") to scope a pilot run to one state via
+  # the Plan-Net `location.address-state` search parameter. null (default)
+  # means unscoped - do not run unscoped against production; Cigna's
+  # directory is national and a pilot should stay to one state.
+  cigna_fhir_state: null
+
+  cigna_fhir_page_size: 50
+  cigna_fhir_fetch_timeout_seconds: 30.0
+
+  # NPPES enrichment for Cigna-sourced providers is off by default - the
+  # FHIR response already carries NPI/name/taxonomy, and NPPES is the
+  # pipeline's main runtime cost driver (see nppes: above). Opt in to
+  # compare against the FHIR-only pilot numbers.
+  cigna_fhir_use_nppes: false
+
+  # Durable resume support (see providermap/checkpoint.py) - a dedicated
+  # SQLite file, separate from database.path, tracking which fetch phases/
+  # batches a provider dataset adapter has already completed. null (default)
+  # disables checkpointing entirely. Set a path before any run expected to
+  # take hours, so it survives an interruption without re-fetching
+  # everything already done.
+  checkpoint_path: null
+
+  # Bounded concurrency for the PractitionerRole batch phase only (see
+  # adapters/providers/cigna_fhir/CONCURRENCY_DESIGN.md). 1 (default)
+  # reproduces the original fully-sequential behavior exactly. The Location
+  # phase and the unscoped search stay sequential regardless of this value -
+  # both paginate via an opaque continuation token that can't be
+  # parallelized.
+  cigna_fhir_max_concurrent_requests: 1
+
+  # Independent of the concurrency limit above - caps how fast new batch
+  # requests are dispatched, not just how many are in flight at once.
+  cigna_fhir_requests_per_second: 5.0
+
+  # Which discovery strategy CignaFhirAdapter.discover() delegates to (see
+  # adapters/providers/cigna_fhir/discovery.py and
+  # NATIONAL_DISCOVERY_DESIGN.md). "state_scoped" (the default) reproduces
+  # the original behavior exactly. "national" is a memory-bounded, spool-
+  # backed strategy (see resource_spool_path below) - implemented, but this
+  # default does not change until a production-quality national ingestion
+  # has completed successfully and been verified (see docs/adr/0001-*.md).
+  cigna_fhir_discovery_mode: "state_scoped"
+
+  # Only read by the "national" discovery strategy - a dedicated SQLite
+  # file every fetched FHIR resource is spooled to instead of an in-memory
+  # cache (see providermap/resource_spool.py). null (default) means
+  # national mode isn't usable yet - selecting it without a path set raises
+  # rather than silently using the unbounded cache this strategy avoids.
+  resource_spool_path: null
+
+  # National discovery partitions its walk into _lastUpdated windows, each
+  # this many days wide, covering the last cigna_fhir_lookback_days. Both
+  # are documented defaults, not measured ones - a later calibration probe
+  # right-sizes them against real data. Both ends of the walk stay open
+  # regardless of these values, so nothing older or newer is ever missed.
+  cigna_fhir_window_days: 30
+  cigna_fhir_lookback_days: 3650

@@ -338,6 +338,64 @@ class TestValidateProvider:
         assert not ok
 
 
+class TestRequireProfileUrlPolicy:
+    """``NpiPolicy.require_profile_url`` (default ``True``) is what lets a
+    provider *dataset* source (e.g. Cigna FHIR - identified by NPI/FHIR id,
+    not a profile page) opt out of a rule that's otherwise correct for the
+    scraped-website pipeline (AdventHealth-style adapters, identified by
+    their profile URL). See ``ProviderDatasetAdapter.requires_profile_url``
+    and ``cmd_ingest_providers`` for how a dataset adapter's policy is built.
+    """
+
+    def _complete_record_except_profile_url(self) -> Provider:
+        return Provider(
+            full_name="Justin Menezes",
+            npi="1194013169",
+            npi_valid=True,
+            address="320 E South St",
+            city="Orlando",
+            state="FL",
+        )
+
+    def test_default_policy_still_requires_profile_url(self) -> None:
+        """Website adapters behave exactly as before: the default
+        ``NpiPolicy()`` (what every existing call site gets when it doesn't
+        override anything) still excludes a record with no profile URL."""
+        p = self._complete_record_except_profile_url()
+        ok, problems = V.validate_provider(p)
+        assert not ok
+        assert "No profile URL" in problems
+
+    def test_explicit_default_construction_requires_profile_url(self) -> None:
+        p = self._complete_record_except_profile_url()
+        ok, problems = V.validate_provider(p, NpiPolicy())
+        assert not ok
+        assert "No profile URL" in problems
+
+    def test_require_profile_url_false_allows_missing_profile_url(self) -> None:
+        """A dataset-adapter-style policy: otherwise-complete record, no
+        profile URL, and that's fine."""
+        p = self._complete_record_except_profile_url()
+        ok, problems = V.validate_provider(p, NpiPolicy(require_profile_url=False))
+        assert ok
+        assert problems == []
+
+    def test_require_profile_url_false_does_not_relax_other_rules(self) -> None:
+        """Turning off the profile-URL requirement doesn't touch any other
+        completeness rule - a record missing its name is still excluded."""
+        p = Provider(
+            npi="1194013169",
+            npi_valid=True,
+            address="1 Main St",
+            city="Orlando",
+            state="FL",
+        )
+        ok, problems = V.validate_provider(p, NpiPolicy(require_profile_url=False))
+        assert not ok
+        assert "No profile URL" not in problems
+        assert any("name" in msg.lower() for msg in problems)
+
+
 class TestNpiPolicy:
     def test_checksum_strict_excludes_bad_npi(self) -> None:
         p = Provider(

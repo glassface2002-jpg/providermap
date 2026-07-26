@@ -10,6 +10,10 @@ dist/
 # Local configuration - contains a real contact email, never the example.
 config.yaml
 .env
+# Same real-email concern - one-off staging/pilot configs copied from
+# config.example.yaml for a specific live run (see database/, below, for
+# why their outputs are excluded too).
+config.staging*.yaml
 
 # Data. The whole point of this repo is the pipeline that produces these,
 # not the outputs of any one person's run - none of it belongs in git.
@@ -26,6 +30,8 @@ database/
 
 # Generated exports
 exports/output/
+# Same as above - a specific staging/pilot run's real ingested output.
+exports/output_staging*/
 
 # Manually-downloaded organization datasets (e.g. CMS Hospital General
 # Information) - large, third-party, and refreshed independently of this
