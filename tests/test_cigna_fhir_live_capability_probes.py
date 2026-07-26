@@ -179,3 +179,69 @@ class TestFinding3LocationIdCommaListReturnsAtMostOne:
             f"viable and worth reconsidering - see "
             f"NATIONAL_DISCOVERY_DESIGN.md's comparison table."
         )
+
+
+class TestLocationEnumerationStateFilterCompleteness:
+    """Regression guard for the deepest previously-unvalidated assumption in
+    state-scoped discovery: does ``Location?address-state=RI`` genuinely
+    return every real RI location, or could one with a missing/non-standard
+    ``address.state`` be silently invisible to it?
+
+    A live investigation cross-checked ~8,300 locations across 11 real RI
+    zip codes against the full 42,108-location enumerated set from a
+    corrected pilot run: 16 apparent misses were found, and every one had
+    ``meta.lastUpdated`` hours AFTER the pilot's run window ended - i.e.
+    ordinary data drift against a live, changing API, not a state-filter
+    gap. Zero genuine gaps were found.
+
+    That full cross-check is too expensive to re-run routinely (thousands
+    of requests). This test encodes the same *shape* of check cheaply: for
+    one real zip code, ``address-postalcode=<zip>`` alone and
+    ``address-state=RI&address-postalcode=<zip>`` together must return the
+    identical location id set. Any location present in the zip-only query
+    but absent once ``address-state=RI`` is added would be direct,
+    reproducible evidence the state filter drops something - the exact
+    failure this test exists to catch if Cigna's server ever changes.
+    """
+
+    @pytest.fixture()
+    def a_real_ri_zip(self) -> str:
+        status, bundle = _get(f"{_BASE_URL}/Location?address-state=RI&_count=5")
+        assert status == 200
+        for entry in bundle.get("entry", []) or []:
+            addr = (entry.get("resource") or {}).get("address") or {}
+            zip5 = (addr.get("postalCode") or "").split("-")[0]
+            if len(zip5) == 5:
+                return zip5
+        pytest.skip("No RI location with a usable zip code returned right now")
+
+    def test_state_filter_never_drops_a_location_the_zip_alone_finds(
+        self, a_real_ri_zip: str
+    ) -> None:
+        status_zip, bundle_zip = _get(
+            f"{_BASE_URL}/Location?address-postalcode={a_real_ri_zip}&_count=50"
+        )
+        status_combined, bundle_combined = _get(
+            f"{_BASE_URL}/Location?address-state=RI&address-postalcode={a_real_ri_zip}&_count=50"
+        )
+        assert status_zip == 200
+        assert status_combined == 200
+
+        def location_ids(bundle: dict) -> set[str]:  # type: ignore[type-arg]
+            return {
+                entry["resource"]["id"]
+                for entry in bundle.get("entry", []) or []
+                if entry.get("resource", {}).get("resourceType") == "Location"
+            }
+
+        zip_only_ids = location_ids(bundle_zip)
+        combined_ids = location_ids(bundle_combined)
+        missing = zip_only_ids - combined_ids
+        assert not missing, (
+            f"{len(missing)} location(s) found by zip {a_real_ri_zip} alone "
+            f"are missing once address-state=RI is added - this is a real "
+            f"state-filter completeness gap, not drift (both queries ran "
+            f"back-to-back). See NATIONAL_DISCOVERY_DESIGN.md and the "
+            f"corrected RI pilot's own enumeration for what depends on "
+            f"this filter being trustworthy."
+        )
