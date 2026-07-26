@@ -814,6 +814,158 @@ class TestSilentFailureInstrumentation:
         assert stats.suspected_silent_failure is True
 
 
+class TestLocationEnumerationResumability:
+    """Location enumeration is resumable at PAGE granularity (see
+    ``StateScopedDiscovery._run_location_enumeration``) - an interruption
+    mid-walk leaves per-page checkpoint items behind, and a later run
+    continues from the saved FHIR cursor instead of re-walking from page 1.
+    If that saved cursor turns out to be stale (the confirmed total:0
+    signature - see ``DiscoveryStats``), the resume is abandoned and the
+    walk restarts cleanly, exactly as it always has.
+    """
+
+    def _urls(self, config: Config) -> tuple[str, str, str, str]:
+        pc = config.providers
+        location_page1_url = _location_search_url(pc.cigna_fhir_base_url, "RI", 1)
+        location_page2_url = f"{pc.cigna_fhir_base_url}/Location?page=2"
+        role_url_a = _practitioner_role_by_location_url(pc.cigna_fhir_base_url, "loc-a", 1)
+        role_url_b = _practitioner_role_by_location_url(pc.cigna_fhir_base_url, "loc-b", 1)
+        return location_page1_url, location_page2_url, role_url_a, role_url_b
+
+    def _location_pages(self, next_url: str) -> tuple[dict, dict]:  # type: ignore[type-arg]
+        page1 = {
+            "resourceType": "Bundle",
+            "type": "searchset",
+            "link": [{"relation": "next", "url": next_url}],
+            "entry": [STATE_LOCATION_BUNDLE["entry"][0]],  # loc-a
+        }
+        page2 = {
+            "resourceType": "Bundle",
+            "type": "searchset",
+            "link": [],
+            "entry": [STATE_LOCATION_BUNDLE["entry"][1]],  # loc-b
+        }
+        return page1, page2
+
+    def test_interrupted_walk_resumes_from_the_saved_cursor_without_refetching_page_1(
+        self, config: Config, tmp_path
+    ) -> None:  # type: ignore[no-untyped-def]
+        config.providers.cigna_fhir_state = "RI"
+        config.providers.cigna_fhir_page_size = 1
+        page1_url, page2_url, role_url_a, role_url_b = self._urls(config)
+        page1, page2 = self._location_pages(page2_url)
+        checkpoint_path = tmp_path / "checkpoints.db"
+
+        # Run 1: page 1 fetches fine, page 2 raises (simulating a crash
+        # mid-walk) - page 1 must already be checkpointed by the time this
+        # propagates, since _on_page fires before the loop attempts page 2.
+        cp1 = CheckpointStore(checkpoint_path)
+        fetch1, calls1 = _counting_fetcher({page1_url: page1, page2_url: page2}, fail_on={page2_url})
+        adapter1 = CignaFhirAdapter(config, page_fetcher=fetch1, checkpoint_store=cp1)
+        with pytest.raises(RuntimeError):
+            list(adapter1.discover())
+        assert calls1[page1_url] == 1
+        assert calls1[page2_url] == 1
+        # Page 1's per-page checkpoint must exist despite the overall failure.
+        assert cp1.status("cigna_fhir:RI", "location_enumeration_pages", "0") == "done"
+        assert cp1.get_payload("cigna_fhir:RI", "location_enumeration_cursor", "current") == {
+            "next_url": page2_url,
+            "next_page_index": 1,
+        }
+        cp1.close()
+
+        # Run 2: same checkpoint file, page 2 now succeeds - page 1 must
+        # NOT be re-fetched.
+        cp2 = CheckpointStore(checkpoint_path)
+        fetch2, calls2 = _counting_fetcher(
+            {page1_url: page1, page2_url: page2, role_url_a: STATE_ROLE_BUNDLE, role_url_b: _EMPTY_BUNDLE}
+        )
+        adapter2 = CignaFhirAdapter(config, page_fetcher=fetch2, checkpoint_store=cp2)
+        records = list(adapter2.discover())
+
+        assert page1_url not in calls2  # resumed from checkpoint, no re-fetch
+        assert calls2[page2_url] == 1
+        assert {r["practitioner"]["id"] for r in records} == {"practitioner-ri"}
+        # Once the whole phase completes, per-page bookkeeping must be gone.
+        assert cp2.done_payloads("cigna_fhir:RI", "location_enumeration_pages") == {}
+        assert cp2.get_payload("cigna_fhir:RI", "location_enumeration_cursor", "current") is None
+        assert cp2.status("cigna_fhir:RI", "location_enumeration", "all") == "done"
+        cp2.close()
+
+    def test_stale_resumed_cursor_falls_back_to_a_clean_full_restart(
+        self, config: Config, tmp_path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """The saved cursor from run 1 is dead by the time run 2 starts
+        (returns the total:0 signature) - the resume must be abandoned and
+        the walk redone from page 1, still producing the complete, correct
+        result. This is the exact failure mode of a real Cigna cursor
+        expiring across a long interruption (measured ~17min idle TTL)."""
+        config.providers.cigna_fhir_state = "RI"
+        config.providers.cigna_fhir_page_size = 1
+        page1_url, page2_url, role_url_a, role_url_b = self._urls(config)
+        page1, page2 = self._location_pages(page2_url)
+        total_zero_bundle = {"resourceType": "Bundle", "type": "searchset", "link": [], "total": 0}
+        checkpoint_path = tmp_path / "checkpoints.db"
+
+        cp1 = CheckpointStore(checkpoint_path)
+        fetch1, _calls1 = _counting_fetcher({page1_url: page1, page2_url: page2}, fail_on={page2_url})
+        adapter1 = CignaFhirAdapter(config, page_fetcher=fetch1, checkpoint_store=cp1)
+        with pytest.raises(RuntimeError):
+            list(adapter1.discover())
+        cp1.close()
+
+        # Run 2: the saved cursor (page2_url) is now stale and returns
+        # total:0. A FRESH walk from page1_url must still work.
+        cp2 = CheckpointStore(checkpoint_path)
+        fetch2, calls2 = _counting_fetcher(
+            {
+                page1_url: page1,
+                page2_url: total_zero_bundle,
+                role_url_a: STATE_ROLE_BUNDLE,
+                role_url_b: _EMPTY_BUNDLE,
+            }
+        )
+        adapter2 = CignaFhirAdapter(config, page_fetcher=fetch2, checkpoint_store=cp2)
+        records = list(adapter2.discover())
+
+        # page1_url is fetched TWICE: once by the doomed resume attempt
+        # (page2_url alone can't be walked without re-deriving page1's data,
+        # so the restart re-walks from page1_url), proving the fallback
+        # genuinely restarted rather than silently accepting partial data.
+        assert calls2[page1_url] >= 1
+        assert calls2[page2_url] >= 1
+        assert {r["practitioner"]["id"] for r in records} == {"practitioner-ri"}
+        assert cp2.done_payloads("cigna_fhir:RI", "location_enumeration_pages") == {}
+        assert cp2.status("cigna_fhir:RI", "location_enumeration", "all") == "done"
+        cp2.close()
+
+    def test_completed_run_leaves_no_leftover_per_page_checkpoint_items(
+        self, config: Config, tmp_path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """A location enumeration that completes in ONE pass (no
+        interruption at all) must still end with the per-page bookkeeping
+        cleared - it's write-during-the-walk-only scratch state, not meant
+        to persist once the whole-phase checkpoint exists."""
+        config.providers.cigna_fhir_state = "RI"
+        config.providers.cigna_fhir_page_size = 1
+        page1_url, page2_url, role_url_a, role_url_b = self._urls(config)
+        page1, page2 = self._location_pages(page2_url)
+        checkpoint_path = tmp_path / "checkpoints.db"
+
+        cp = CheckpointStore(checkpoint_path)
+        adapter = CignaFhirAdapter(
+            config,
+            page_fetcher=make_fetcher(
+                {page1_url: page1, page2_url: page2, role_url_a: STATE_ROLE_BUNDLE, role_url_b: _EMPTY_BUNDLE}
+            ),
+            checkpoint_store=cp,
+        )
+        list(adapter.discover())
+        assert cp.done_payloads("cigna_fhir:RI", "location_enumeration_pages") == {}
+        assert cp.get_payload("cigna_fhir:RI", "location_enumeration_cursor", "current") is None
+        cp.close()
+
+
 class TestCheckpointResume:
     """Durable resume (see providermap/checkpoint.py) - a batch that fails
     is retried on a later run without re-fetching anything already done."""

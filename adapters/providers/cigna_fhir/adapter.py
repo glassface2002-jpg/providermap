@@ -571,13 +571,24 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
         return bundle
 
     def _fetch_location_page_entries(
-        self, start_url: str | None, stats: DiscoveryStats
+        self,
+        start_url: str | None,
+        stats: DiscoveryStats,
+        on_page: Callable[[list[dict[str, Any]], str | None], None] | None = None,
     ) -> list[dict[str, Any]]:
         """Follow ``next`` links starting at ``start_url``, returning every
         raw ``Location`` resource dict encountered - fetch only, no
         application to any shared cache. This is what gets checkpointed (see
         :meth:`_apply_location_entries`), so a resumed run can replay it
-        without a second network request."""
+        without a second network request.
+
+        ``on_page``, if given, is called once per fetched page with (this
+        page's ``Location`` resources, the next page's cursor URL, or
+        ``None`` if this was the last page) - lets a caller persist
+        incremental per-page progress (see
+        ``StateScopedDiscovery._run_location_enumeration``) without this
+        method needing any awareness of checkpointing itself.
+        """
         entries: list[dict[str, Any]] = []
         url = start_url
         is_continuation = False
@@ -585,16 +596,28 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
         while url:
             bundle = self._fetch_timed(url, "Location", stats, is_continuation)
             pages += 1
-            for entry in bundle.get("entry", []) or []:
-                resource = entry.get("resource")
-                if resource and resource.get("resourceType") == "Location" and resource.get("id"):
-                    entries.append(resource)
-            url = _next_link(bundle)
+            page_entries = [
+                entry.get("resource")
+                for entry in bundle.get("entry", []) or []
+                if entry.get("resource")
+                and entry["resource"].get("resourceType") == "Location"
+                and entry["resource"].get("id")
+            ]
+            entries.extend(page_entries)
+            next_url = _next_link(bundle)
+            if on_page is not None:
+                on_page(page_entries, next_url)
+            url = next_url
             is_continuation = True
         # Reached here only via the loop's natural exit (next link absent) -
         # an exception mid-walk propagates past this point instead, leaving
         # completed_normally at its default None. See DiscoveryStats's
-        # docstring for why None/True/False are three distinct states.
+        # docstring for why None/True/False are three distinct states. Note
+        # this reflects only THIS call's page count - a resumed walk's own
+        # earlier pages (before the interruption) are not re-counted here,
+        # matching the existing convention that stats reflect this process's
+        # activity, not cumulative history across resumes (e.g.
+        # total_requests works the same way).
         stats.location_enumeration_pages = pages
         stats.location_enumeration_completed_normally = True
         return entries

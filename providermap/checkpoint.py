@@ -147,6 +147,22 @@ class CheckpointStore:
         )
         self.conn.commit()
 
+    def clear_phase(self, checkpoint_id: str, phase: str) -> None:
+        """Discard all work-item state for one phase only, leaving every
+        other phase and the run's own started_at/completed_at untouched.
+
+        For when a phase's partial progress turns out to be untrustworthy
+        (e.g. a resumed continuation token that turned out to be stale) and
+        must be redone from scratch, without discarding progress already
+        made in other phases of the same run - unlike :meth:`clear`, which
+        is scoped to the whole run.
+        """
+        self.conn.execute(
+            "DELETE FROM checkpoint_items WHERE checkpoint_id=? AND phase=?",
+            (checkpoint_id, phase),
+        )
+        self.conn.commit()
+
     # ------------------------------------------------------------------ #
     # work items
     # ------------------------------------------------------------------ #

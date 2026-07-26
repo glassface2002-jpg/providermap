@@ -52,6 +52,15 @@ from .adapter import (
 log = logging.getLogger(__name__)
 
 FetchPageEntries = Callable[[str | None, DiscoveryStats], list[dict[str, Any]]]
+#: Same shape as FetchPageEntries, plus an optional per-page callback (this
+#: page's entries, the next page's cursor or None) - lets a strategy persist
+#: incremental progress for resumability. Only fetch_location_page_entries
+#: uses the callback; fetch_role_page_entries' own per-location granularity
+#: already makes it resumable without one (see _handle_batch_result).
+FetchLocationPageEntries = Callable[
+    [str | None, DiscoveryStats, Callable[[list[dict[str, Any]], str | None], None] | None],
+    list[dict[str, Any]],
+]
 ApplyLocationEntries = Callable[
     [list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]], list[str], DiscoveryStats], None
 ]
@@ -89,7 +98,7 @@ class DiscoveryContext:
 
     #: Bound to the owning adapter's fetch/apply implementations - a
     #: strategy calls these without knowing how fetching actually happens.
-    fetch_location_page_entries: FetchPageEntries
+    fetch_location_page_entries: FetchLocationPageEntries
     apply_location_entries: ApplyLocationEntries
     fetch_role_page_entries: FetchPageEntries
     fetch_batches_concurrently: FetchBatchesConcurrently
@@ -136,6 +145,95 @@ class StateScopedDiscovery(DiscoveryStrategy):
     this one's, never the reverse.
     """
 
+    def _run_location_enumeration(
+        self,
+        context: DiscoveryContext,
+        stats: DiscoveryStats,
+        cp: CheckpointStore | None,
+        checkpoint_id: str,
+        resources: dict[tuple[str, str], dict[str, Any]],
+        location_ids: list[str],
+    ) -> None:
+        """Fetch every Location for this run's state, applying results into
+        ``resources``/``location_ids`` in place (matching
+        ``apply_location_entries``'s existing convention). Resumable at PAGE
+        granularity: an interruption mid-walk leaves per-page checkpoint
+        items behind (see ``on_page`` below), and a later call picks up from
+        the last saved FHIR continuation cursor instead of re-walking from
+        page 1.
+
+        That saved cursor may be stale by the time we resume - Cigna's own
+        `_getpages=<uuid>` cursors carry roughly a 17-minute IDLE TTL
+        (measured live; a cursor under CONTINUOUS use does not expire, but
+        one parked across a long interruption can). An expired cursor
+        returns HTTP 200 with an empty bundle and the confirmed total:0
+        failure signature (see ``DiscoveryStats.record_bundle_health``) -
+        indistinguishable from genuine completion by entry count alone, but
+        exactly what that signature exists to catch. If resuming shows it,
+        the partial progress is discarded and the walk restarts cleanly
+        from the beginning, exactly as it always has - correctness never
+        depends on the resumed cursor still being valid, only benefits from
+        it when it is.
+        """
+        resume_url = _location_search_url(context.base_url, context.state, context.page_size)
+        reloaded_entries: list[dict[str, Any]] = []
+        next_page_index = 0
+        resuming = False
+
+        if cp is not None:
+            cursor_payload = cp.get_payload(checkpoint_id, "location_enumeration_cursor", "current")
+            if cursor_payload is not None and cursor_payload.get("next_url"):
+                for _key, page_payload in sorted(
+                    cp.done_payloads(checkpoint_id, "location_enumeration_pages").items(),
+                    key=lambda kv: int(kv[0]),
+                ):
+                    reloaded_entries.extend(page_payload["entries"])
+                resume_url = cursor_payload["next_url"]
+                next_page_index = cursor_payload["next_page_index"]
+                resuming = True
+                log.info(
+                    "Resuming location enumeration from a saved cursor (%d "
+                    "locations already checkpointed from before the interruption)",
+                    len(reloaded_entries),
+                )
+
+        total_zero_before = stats.bundles_with_total_zero_by_endpoint.get("Location", 0)
+        next_index = [next_page_index]  # boxed: mutated by the nested closure below
+
+        def _on_page(page_entries: list[dict[str, Any]], next_url: str | None) -> None:
+            if cp is not None:
+                cp.mark_done(
+                    checkpoint_id,
+                    "location_enumeration_pages",
+                    str(next_index[0]),
+                    {"entries": page_entries},
+                )
+                cp.mark_done(
+                    checkpoint_id,
+                    "location_enumeration_cursor",
+                    "current",
+                    {"next_url": next_url, "next_page_index": next_index[0] + 1},
+                )
+            next_index[0] += 1
+
+        new_entries = context.fetch_location_page_entries(resume_url, stats, _on_page)
+
+        if resuming and stats.bundles_with_total_zero_by_endpoint.get("Location", 0) > total_zero_before:
+            log.warning(
+                "Resumed location-enumeration cursor was stale (total:0 "
+                "signature seen) - discarding saved progress and restarting "
+                "the walk from scratch."
+            )
+            if cp is not None:
+                cp.clear_phase(checkpoint_id, "location_enumeration_pages")
+                cp.clear_phase(checkpoint_id, "location_enumeration_cursor")
+            self._run_location_enumeration(
+                context, stats, cp, checkpoint_id, resources, location_ids
+            )
+            return
+
+        context.apply_location_entries(reloaded_entries + new_entries, resources, location_ids, stats)
+
     def run(self, context: DiscoveryContext) -> Iterator[dict[str, Any]]:
         resources: dict[tuple[str, str], dict[str, Any]] = {}
         roles: list[dict[str, Any]] = []
@@ -162,16 +260,15 @@ class StateScopedDiscovery(DiscoveryStrategy):
             # the state first, seed the resource cache with them, then batch
             # them into PractitionerRole searches.
             #
-            # Checkpoint granularity differs by phase, deliberately: FHIR's
-            # `next`-link pagination uses an opaque continuation token
-            # (confirmed live: Cigna's own `_getpages=<uuid>` scheme), which
-            # is not reliably resumable mid-walk from a fresh process - so
-            # location_enumeration checkpoints as one whole-phase item
-            # (redo the whole walk on resume if it wasn't already complete).
-            # PractitionerRole batches are independent, freshly-issued
-            # requests with no such continuation dependency, so each batch
-            # checkpoints individually - the phase that dominates runtime is
-            # exactly the one that gets fine-grained resume.
+            # Location enumeration is resumable at PAGE granularity (see
+            # _run_location_enumeration below) - once it completes, the
+            # whole-phase "location_enumeration"/"all" item below is what a
+            # later, separate run checks first, exactly as before. The
+            # per-page checkpoint phases underneath it exist only to survive
+            # an interruption DURING this walk; they're cleared once the
+            # whole-phase item is written, so they never accumulate. Ordinary
+            # PractitionerRole batches remain independently checkpointed per
+            # location, unchanged.
             location_ids: list[str] = []
             if cp is not None and cp.status(checkpoint_id, "location_enumeration", "all") == "done":
                 payload = cp.get_payload(checkpoint_id, "location_enumeration", "all")
@@ -184,16 +281,20 @@ class StateScopedDiscovery(DiscoveryStrategy):
                     len(location_ids),
                 )
             else:
-                start_url = _location_search_url(context.base_url, context.state, context.page_size)
-                entries = context.fetch_location_page_entries(start_url, stats)
-                context.apply_location_entries(entries, resources, location_ids, stats)
+                self._run_location_enumeration(context, stats, cp, checkpoint_id, resources, location_ids)
                 if cp is not None:
+                    final_entries = [resources[("Location", lid)] for lid in location_ids]
                     cp.mark_done(
                         checkpoint_id,
                         "location_enumeration",
                         "all",
-                        {"location_ids": location_ids, "entries": entries},
+                        {"location_ids": location_ids, "entries": final_entries},
                     )
+                    # No longer needed once the whole-phase item exists -
+                    # drop the per-page bookkeeping so it never accumulates
+                    # across repeated runs of the same scope.
+                    cp.clear_phase(checkpoint_id, "location_enumeration_pages")
+                    cp.clear_phase(checkpoint_id, "location_enumeration_cursor")
 
             # Collect the batches that still need fetching (skip anything
             # already checkpointed as done) before deciding sequential vs.

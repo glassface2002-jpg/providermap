@@ -98,6 +98,29 @@ class TestClear:
         assert store.start_or_resume("run-1") is False  # treated as fresh, not a resume
 
 
+class TestClearPhase:
+    def test_clear_phase_removes_only_that_phase(self, store: CheckpointStore) -> None:
+        store.start_or_resume("run-1")
+        store.mark_done("run-1", "phase-a", "1", {"x": 1})
+        store.mark_done("run-1", "phase-b", "1", {"y": 2})
+        store.clear_phase("run-1", "phase-a")
+        assert store.status("run-1", "phase-a", "1") is None
+        assert store.status("run-1", "phase-b", "1") == "done"  # untouched
+
+    def test_clear_phase_leaves_the_run_itself_intact(self, store: CheckpointStore) -> None:
+        store.start_or_resume("run-1")
+        store.mark_done("run-1", "phase-a", "1", {})
+        store.clear_phase("run-1", "phase-a")
+        # Unlike clear(), the run is not reset to "fresh" - a caller that
+        # cleared one phase to redo it is still mid-run, not starting over.
+        assert store.start_or_resume("run-1") is True
+
+    def test_clear_phase_on_an_empty_phase_is_a_harmless_no_op(self, store: CheckpointStore) -> None:
+        store.start_or_resume("run-1")
+        store.clear_phase("run-1", "never-used-phase")  # must not raise
+        assert store.status("run-1", "never-used-phase", "1") is None
+
+
 class TestDurability:
     def test_state_survives_reopening_the_same_file(self, tmp_path: Path) -> None:
         path = tmp_path / "checkpoints.db"
