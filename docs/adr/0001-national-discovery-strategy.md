@@ -2,7 +2,18 @@
 
 ## Status
 
-Approved (design only — not yet implemented). See
+**Superseded by [0002](0002-close-alternate-discovery-traversals.md).** The
+national discovery strategy this ADR approved was built and offline-tested
+(`NationalDiscovery`/`ResourceSpool`, opt-in via
+`cigna_fhir_discovery_mode: "national"`), then later invalidated for
+production use by live evidence at production pagination scale (Finding 4 in
+`adapters/providers/cigna_fhir/evidence/PHASE_E_CAPABILITY_PROBES.md`). The
+code is not removed, but must never be selected against the real Cigna API.
+This document is preserved as the historical record of the original decision
+and the reasoning behind it — see ADR-0002 for why it was reversed and what
+replaces it.
+
+Original status: Approved (design only — not yet implemented). See
 `adapters/providers/cigna_fhir/NATIONAL_DISCOVERY_DESIGN.md` for the full
 design this ADR summarizes, and
 `adapters/providers/cigna_fhir/evidence/PHASE_E_CAPABILITY_PROBES.md` for the

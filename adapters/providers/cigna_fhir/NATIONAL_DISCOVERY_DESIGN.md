@@ -1,6 +1,51 @@
 # Cigna FHIR adapter — national discovery architecture
 
-## Status: proposal approved (design only — not implemented)
+## Status: REJECTED for production use — implemented and offline-tested, but disqualified by live evidence
+
+**This design was built** — `adapters/providers/cigna_fhir/discovery.py`'s
+`NationalDiscovery` and `providermap/resource_spool.py`'s `ResourceSpool`,
+opt-in via `cigna_fhir_discovery_mode: "national"`, validated against all
+thirteen offline criteria below (V1-V13, including export-equivalence) — but
+it is **rejected for use against the real Cigna API and will not become the
+default or be recommended going forward.** The code is not being deleted
+(see `docs/adr/0002-close-alternate-discovery-traversals.md`'s Decision #3),
+but it must never be selected in a production run.
+
+See `docs/adr/0002-close-alternate-discovery-traversals.md` for the decision
+record and `evidence/PHASE_E_CAPABILITY_PROBES.md`'s **Finding 4** for the
+evidence that closed it: at real pagination scale against the live
+`fhir.cigna.com` server (the full Rhode Island scope, walked end to end via
+`next` links rather than read one page and stopped), the national/`_include`
+traversal this document recommends produced **33 silent `total:0` failure
+pages**, recovering only **40,555 of 42,108 expected locations** — **228
+role-bearing locations** and **831 role ids** silently lost, indistinguishable
+from success without the `total:0`-signature instrumentation that
+investigation motivated (see `DiscoveryStats.suspected_silent_failure`). The
+V1-V13 offline validation below all passed because it ran against synthetic
+fixtures, not the real server at real pagination volume — it correctly
+proves the code does what it's designed to do; it cannot and did not catch
+a real-server behavior that only appears at production scale.
+
+That reverses this document's Finding 1 (below), which was a five-role,
+single-page probe that never exercised real pagination and so never
+encountered the failure mode. **Per-location state-scoped discovery — the
+strategy already shipped — is the correct and only production architecture
+for this adapter.** Its own truncation (Findings 2-3 below) is understood,
+bounded, and was independently live-validated to be zero gaps against the
+actual state/postal-code filters in production use — a materially different,
+safer failure profile than national's silent, previously-undetected data
+loss. OR-list batching (Finding 3) and alternate anchors (e.g. an
+`Organization`-scoped `_revinclude` walk, ruled out during Phase D — see
+`evidence/PHASE_D_METRICS.md`) remain closed for the reasons already recorded
+against them. From here, further work targets making the existing
+per-location architecture production-ready (memory/streaming, checkpoint
+efficiency — see the adapter's own docstring and `CHANGELOG.md`), not
+discovering a new traversal strategy.
+
+---
+
+*The historical proposal, preserved below exactly as it was reviewed and
+approved at the time, before Finding 4 closed it:*
 
 This document **supersedes the original Phase E draft**. That draft assumed
 Cigna's `_revinclude` optimization was a viable half-measure and assumed
@@ -481,11 +526,15 @@ is a pure code move with no behavior delta to undo.
 
 ---
 
-## Recommendation
+## Recommendation (historical — overturned by Finding 4; see status notice at top)
 
-**Yes — national unscoped traversal should become ProviderMap's national
-ingestion strategy, with state-scoped retained as a first-class targeted
-mode, not replaced.** It is the only approach that is memory-bounded,
+**At the time this was written: yes — national unscoped traversal should
+become ProviderMap's national ingestion strategy, with state-scoped retained
+as a first-class targeted mode, not replaced.** This recommendation did not
+survive validation at production pagination scale — see the status notice at
+the top of this document and `docs/adr/0002-close-alternate-discovery-traversals.md`.
+It is preserved verbatim below for the historical record. At the time it was
+written, it was believed to be the only approach that is memory-bounded,
 request-efficient, and produces the complete location graph. State-scoped
 remains genuinely the better choice for a single-state refresh or
 troubleshooting session, and it is the only discovery mode with any

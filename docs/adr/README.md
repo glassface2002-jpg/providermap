@@ -49,4 +49,5 @@ duplicating its content — the ADR is the summary, not a second copy.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-national-discovery-strategy.md) | National discovery strategy for the Cigna FHIR adapter | Approved (design only — not implemented) |
+| [0001](0001-national-discovery-strategy.md) | National discovery strategy for the Cigna FHIR adapter | Superseded by 0002 |
+| [0002](0002-close-alternate-discovery-traversals.md) | Reject national discovery for production use; retain per-location state-scoped discovery | Approved |
