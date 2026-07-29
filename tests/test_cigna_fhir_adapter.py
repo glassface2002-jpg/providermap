@@ -528,8 +528,9 @@ class TestNormalize:
         assert provider.npi == JANE_DOE_NPI
         assert provider.npi_valid is True
         assert provider.location_count == 2
-        # Both roles have exactly one location each (a tie) - first-seen
-        # (location-1, from role-1 on page 1) wins deterministically.
+        # Both roles have exactly one location each (a tie) - the
+        # lexicographically smallest location id ("location-1") wins
+        # deterministically, independent of fetch/page order.
         assert provider.address == "100 Main St"
         assert provider.city == "Hartford"
         assert provider.specialty == "Family Medicine"
@@ -561,6 +562,188 @@ class TestNormalize:
     def test_organizations_tagged_with_source(self, normalized: NormalizedProvider) -> None:
         for org, _rel in normalized.organizations:
             assert org.source == "Cigna"
+
+
+def _determinism_raw(roles: list[tuple[str, list[str]]]) -> dict:  # type: ignore[type-arg]
+    """Build a raw discovery record for primary-location determinism tests:
+    ``roles`` is [(role_id, [location_ids])]. Every referenced location gets
+    a distinct address so the selected primary is observable through
+    ``provider.address``."""
+    loc_ids = sorted({lid for _rid, lids in roles for lid in lids})
+    return {
+        "practitioner": {
+            "resourceType": "Practitioner",
+            "id": "p-det",
+            "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}],
+            "name": [{"family": "Doe", "given": ["Jane"]}],
+        },
+        "roles": [
+            {
+                "resourceType": "PractitionerRole",
+                "id": rid,
+                "practitioner": {"reference": "Practitioner/p-det"},
+                "location": [{"reference": f"Location/{lid}"} for lid in lids],
+                "specialty": [],
+            }
+            for rid, lids in roles
+        ],
+        "locations": {
+            lid: {
+                "resourceType": "Location",
+                "id": lid,
+                "name": f"Clinic {lid}",
+                "address": {
+                    "line": [f"{i + 1}00 {lid} St"],
+                    "city": "Providence",
+                    "state": "RI",
+                    "postalCode": "02903",
+                },
+            }
+            for i, lid in enumerate(loc_ids)
+        },
+        "organizations": {},
+    }
+
+
+class TestPrimaryLocationDeterminism:
+    """Primary-location selection must be a pure function of the
+    practitioner's DISTINCT role set: independent of fetch order, fetch
+    multiplicity (each role is re-fetched once per in-state location it
+    references), checkpoint replay order, and storage backend. The previous
+    implementation counted role OCCURRENCES (measured 2.4x non-uniform
+    inflation on Rhode Island) and tie-broke on first-seen traversal
+    order."""
+
+    def _primary_address(self, config: Config, raw: dict) -> str | None:  # type: ignore[type-arg]
+        adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}))
+        return adapter.normalize(adapter.extract(raw)).provider.address
+
+    def test_shuffled_role_order_yields_identical_primary(self, config: Config) -> None:
+        roles = [("r-1", ["loc-x"]), ("r-2", ["loc-y"]), ("r-3", ["loc-y"])]
+        forward = self._primary_address(config, _determinism_raw(roles))
+        backward = self._primary_address(config, _determinism_raw(list(reversed(roles))))
+        assert forward == backward
+        assert forward == "200 loc-y St"  # loc-y wins outright (2 distinct roles vs 1)
+
+    def test_exact_tie_breaks_to_smallest_location_id_not_first_seen(
+        self, config: Config
+    ) -> None:
+        # loc-z is seen first (would have won under first-seen); the tie
+        # must instead break to the lexicographically smallest id, loc-a.
+        raw = _determinism_raw([("r-1", ["loc-z"]), ("r-2", ["loc-a"])])
+        assert self._primary_address(config, raw) == "100 loc-a St"
+
+    def test_clear_winner_beats_smaller_id(self, config: Config) -> None:
+        # Distinct-role count still dominates: loc-z has 2 roles, loc-a has
+        # 1 - loc-z wins despite sorting after loc-a.
+        raw = _determinism_raw([("r-1", ["loc-z"]), ("r-2", ["loc-z"]), ("r-3", ["loc-a"])])
+        assert self._primary_address(config, raw) == "200 loc-z St"
+
+    def test_apply_role_entries_dedupes_across_calls(self, config: Config) -> None:
+        # One role re-fetched by two different per-location batches (the
+        # real duplication mechanism) must land in `roles` exactly once.
+        adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}))
+        from adapters.providers.cigna_fhir.adapter import DiscoveryStats
+
+        stats = DiscoveryStats()
+        resources: dict = {}
+        roles: list = []
+        role = {
+            "resourceType": "PractitionerRole",
+            "id": "r-dup",
+            "practitioner": {"reference": "Practitioner/p-1"},
+            "location": [{"reference": "Location/loc-a"}, {"reference": "Location/loc-b"}],
+        }
+        adapter._apply_role_entries([role], resources, roles, stats)  # loc-a's batch
+        adapter._apply_role_entries([role], resources, roles, stats)  # loc-b's batch
+        assert len(roles) == 1
+        assert stats.duplicate_resources_by_type == {"PractitionerRole": 1}
+
+    def test_end_to_end_duplication_does_not_inflate_primary_selection(
+        self, config: Config
+    ) -> None:
+        """The audit's worked example, end to end through discover():
+        loc-a has 2 distinct single-location roles; loc-b/loc-c share one
+        multi-location role that gets re-fetched by both their batches.
+        Occurrence-counting saw a 2/2/2 three-way tie broken by first-seen
+        (loc-b); distinct-role counting must pick loc-a (2 > 1)."""
+        config.providers.cigna_fhir_state = "RI"
+        pc = config.providers
+        location_url = _location_search_url(pc.cigna_fhir_base_url, "RI", pc.cigna_fhir_page_size)
+
+        def loc(lid: str, street: str) -> dict:  # type: ignore[type-arg]
+            return {
+                "resource": {
+                    "resourceType": "Location",
+                    "id": lid,
+                    "name": f"Clinic {lid}",
+                    "address": {
+                        "line": [street],
+                        "city": "Providence",
+                        "state": "RI",
+                        "postalCode": "02903",
+                    },
+                }
+            }
+
+        # loc-b enumerated first, so under the old first-seen tie-break it
+        # would have been the winner.
+        location_bundle = {
+            "resourceType": "Bundle",
+            "type": "searchset",
+            "link": [],
+            "entry": [loc("loc-b", "1 B St"), loc("loc-c", "2 C St"), loc("loc-a", "3 A St")],
+        }
+
+        practitioner = {
+            "resourceType": "Practitioner",
+            "id": "p-1",
+            "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}],
+            "name": [{"family": "Doe", "given": ["Jane"]}],
+        }
+
+        def role(rid: str, lids: list[str]) -> dict:  # type: ignore[type-arg]
+            return {
+                "resourceType": "PractitionerRole",
+                "id": rid,
+                "practitioner": {"reference": "Practitioner/p-1"},
+                "location": [{"reference": f"Location/{lid}"} for lid in lids],
+                "specialty": [],
+            }
+
+        multi_role = role("r-multi", ["loc-b", "loc-c"])
+        bundle_b = {
+            "resourceType": "Bundle",
+            "type": "searchset",
+            "link": [],
+            "entry": [{"resource": practitioner}, {"resource": multi_role}],
+        }
+        bundle_c = {
+            "resourceType": "Bundle",
+            "type": "searchset",
+            "link": [],
+            "entry": [{"resource": multi_role}],  # the re-fetch duplication
+        }
+        bundle_a = {
+            "resourceType": "Bundle",
+            "type": "searchset",
+            "link": [],
+            "entry": [
+                {"resource": role("r-a1", ["loc-a"])},
+                {"resource": role("r-a2", ["loc-a"])},
+            ],
+        }
+        pages = {location_url: location_bundle}
+        for lid, bundle in [("loc-b", bundle_b), ("loc-c", bundle_c), ("loc-a", bundle_a)]:
+            pages[_practitioner_role_by_location_url(pc.cigna_fhir_base_url, lid, pc.cigna_fhir_page_size)] = bundle
+
+        adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher(pages))
+        records = list(adapter.discover())
+        assert len(records) == 1
+        assert len(records[0]["roles"]) == 3  # r-multi present once, not twice
+
+        normalized = adapter.normalize(adapter.extract(records[0]))
+        assert normalized.provider.address == "3 A St"  # loc-a: 2 distinct roles beat 1
 
 
 class TestNormalizeMissingNpi:

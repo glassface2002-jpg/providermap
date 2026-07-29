@@ -807,9 +807,24 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
     ) -> None:
         for resource in entries:
             key = (resource["resourceType"], resource["id"])
-            stats.record_resource(resource["resourceType"], is_duplicate=key in resources)
+            is_duplicate = key in resources
+            stats.record_resource(resource["resourceType"], is_duplicate=is_duplicate)
             resources[key] = resource
-            if resource["resourceType"] == "PractitionerRole":
+            # Append each role ONCE, no matter how many batches return it.
+            # The same PractitionerRole is re-fetched once per in-state
+            # location it references (one query per location - see
+            # _practitioner_role_by_location_url), so without this guard
+            # `roles` carries duplicate occurrences (measured 65,256 seen
+            # vs 27,171 distinct on Rhode Island, a non-uniform 2.4x
+            # inflation) and normalize()'s primary-location scoring counts
+            # a role's locations once per re-fetch - making the selected
+            # primary depend on fetch multiplicity rather than the data.
+            # The shared `resources` dict spans the whole run() - including
+            # checkpoint-replayed batches, which call this same method - so
+            # this is the one place that sees every occurrence.
+            # (`resources[key]` is still refreshed on re-sight above; the
+            # body is the same server resource either way.)
+            if resource["resourceType"] == "PractitionerRole" and not is_duplicate:
                 roles.append(resource)
 
     def _build_discovery_context(self, stats: DiscoveryStats) -> "DiscoveryContext":
@@ -958,20 +973,25 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
 
         # Deterministic primary-location selection: FHIR gives no ranking
         # among a practitioner's locations, so pick whichever location is
-        # tied to the most roles, tie-broken by first appearance order.
+        # tied to the most DISTINCT roles (deduplicated upstream in
+        # _apply_role_entries), tie-broken by lexicographically smallest
+        # location id. Both the count and the tie-break are pure functions
+        # of the practitioner's role set - fetch order, fetch multiplicity,
+        # checkpoint replay order, and storage backend cannot change the
+        # winner. (The previous first-appearance tie-break made the common
+        # case - most locations tie at one role each - depend on traversal
+        # order, and its .index() scan was O(n^2) in locations per
+        # practitioner.)
         location_role_counts: dict[str, int] = {}
-        first_seen_order: list[str] = []
         for role in roles:
             for loc_id in role["location_ids"]:
-                if loc_id not in location_role_counts:
-                    first_seen_order.append(loc_id)
                 location_role_counts[loc_id] = location_role_counts.get(loc_id, 0) + 1
 
         primary_location_id = None
-        if first_seen_order:
-            primary_location_id = max(
-                first_seen_order,
-                key=lambda lid: (location_role_counts[lid], -first_seen_order.index(lid)),
+        if location_role_counts:
+            primary_location_id = min(
+                location_role_counts,
+                key=lambda lid: (-location_role_counts[lid], lid),
             )
 
         # The role tied to the primary location is the one whose
