@@ -42,6 +42,7 @@ from providermap.resource_spool import ResourceSpool
 
 from .adapter import (
     DiscoveryStats,
+    SilentTotalZeroError,
     _location_search_url,
     _national_window_url,
     _parse_reference,
@@ -173,14 +174,19 @@ class StateScopedDiscovery(DiscoveryStrategy):
         `_getpages=<uuid>` cursors carry roughly a 17-minute IDLE TTL
         (measured live; a cursor under CONTINUOUS use does not expire, but
         one parked across a long interruption can). An expired cursor
-        returns HTTP 200 with an empty bundle and the confirmed total:0
-        failure signature (see ``DiscoveryStats.record_bundle_health``) -
-        indistinguishable from genuine completion by entry count alone, but
-        exactly what that signature exists to catch. If resuming shows it,
-        the partial progress is discarded and the walk restarts cleanly
-        from the beginning, exactly as it always has - correctness never
-        depends on the resumed cursor still being valid, only benefits from
-        it when it is.
+        returns HTTP 200 with the confirmed total:0 failure signature,
+        which the retry wrappers now surface as
+        :class:`~adapters.providers.cigna_fhir.adapter.SilentTotalZeroError`
+        after exhausting retries (retrying a truly-stale cursor is futile
+        but cheap, and keeps one uniform total:0 rule for every fetch
+        path). On a RESUMED walk that error means "stale cursor": the
+        partial progress is discarded, the total:0 count is reclassified
+        into ``stats.stale_cursor_restarts`` (a recovered restart is not a
+        silent failure - without reclassification the completeness gate
+        would fail a healthy run), and the walk restarts cleanly from the
+        beginning. On a FRESH walk the same error is a genuine silent
+        failure and propagates - failing the run loudly rather than
+        recording an undercounted enumeration as complete.
         """
         resume_url = _location_search_url(context.base_url, context.state, context.page_size)
         reloaded_entries: list[dict[str, Any]] = []
@@ -204,7 +210,6 @@ class StateScopedDiscovery(DiscoveryStrategy):
                     len(reloaded_entries),
                 )
 
-        total_zero_before = stats.bundles_with_total_zero_by_endpoint.get("Location", 0)
         next_index = [next_page_index]  # boxed: mutated by the nested closure below
 
         def _on_page(page_entries: list[dict[str, Any]], next_url: str | None) -> None:
@@ -223,17 +228,38 @@ class StateScopedDiscovery(DiscoveryStrategy):
                 )
             next_index[0] += 1
 
-        new_entries = context.fetch_location_page_entries(resume_url, stats, _on_page)
-
-        if resuming and stats.bundles_with_total_zero_by_endpoint.get("Location", 0) > total_zero_before:
+        try:
+            new_entries = context.fetch_location_page_entries(resume_url, stats, _on_page)
+        except SilentTotalZeroError:
+            if not resuming:
+                # Fresh walk: a persistent total:0 page is a genuine silent
+                # failure - propagate so the run fails loudly (per-page
+                # checkpoints written so far still allow a cursor resume).
+                raise
             log.warning(
                 "Resumed location-enumeration cursor was stale (total:0 "
-                "signature seen) - discarding saved progress and restarting "
-                "the walk from scratch."
+                "signature persisted through retries) - discarding saved "
+                "progress and restarting the walk from scratch."
             )
+            # Reclassify: a stale cursor that a restart recovers is NOT a
+            # silent failure. The exhaustion counter was incremented by the
+            # retry wrapper before raising; move that count into
+            # stale_cursor_restarts so suspected_silent_failure (and the
+            # CLI's completeness gate) doesn't fail a healthy run. The key
+            # is deleted at zero because suspected_silent_failure checks
+            # dict truthiness, and {"Location": 0} is a non-empty dict.
+            remaining = stats.bundles_with_total_zero_by_endpoint.get("Location", 0) - 1
+            if remaining > 0:
+                stats.bundles_with_total_zero_by_endpoint["Location"] = remaining
+            else:
+                stats.bundles_with_total_zero_by_endpoint.pop("Location", None)
+            stats.stale_cursor_restarts += 1
             if cp is not None:
                 cp.clear_phase(checkpoint_id, "location_enumeration_pages")
                 cp.clear_phase(checkpoint_id, "location_enumeration_cursor")
+            # Bounded: the recursed call finds no saved cursor (cleared
+            # above), so resuming=False - a second persistent total:0
+            # propagates as a genuine failure instead of looping.
             self._run_location_enumeration(
                 context, stats, cp, checkpoint_id, resources, location_ids
             )
@@ -395,10 +421,26 @@ class StateScopedDiscovery(DiscoveryStrategy):
                 context.apply_role_entries(payload["entries"], resources, roles, stats)
             else:
                 start_url = _unscoped_search_url(context.base_url, context.page_size)
-                entries = context.fetch_role_page_entries(start_url, stats)
-                context.apply_role_entries(entries, resources, roles, stats)
-                if cp is not None:
-                    cp.mark_done(checkpoint_id, "practitioner_role_pages", "all", {"entries": entries})
+                # Same containment the per-location batch paths get from
+                # _handle_batch_result: a failed unscoped walk (silent
+                # total:0 or otherwise) is recorded as an error and blocks
+                # mark_complete, instead of propagating a raw traceback out
+                # of the generator with the run row left unfinished.
+                try:
+                    entries = context.fetch_role_page_entries(start_url, stats)
+                except Exception as exc:  # noqa: BLE001
+                    had_errors = True
+                    stats.failed_batches.append(("unscoped", repr(exc)))
+                    log.error(
+                        "Unscoped PractitionerRole walk failed - this run "
+                        "discovered no providers and will not be marked "
+                        "complete: %r",
+                        exc,
+                    )
+                else:
+                    context.apply_role_entries(entries, resources, roles, stats)
+                    if cp is not None:
+                        cp.mark_done(checkpoint_id, "practitioner_role_pages", "all", {"entries": entries})
 
         # Group every PractitionerRole by its practitioner, across ALL pages,
         # before yielding anything - see the module docstring's "do not trust

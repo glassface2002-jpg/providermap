@@ -193,6 +193,21 @@ class DiscoveryStats:
     #: provider_locations row count in the database, which is a downstream,
     #: post-normalization concern this stat deliberately does not track.
     provider_location_relationships_discovered: int = 0
+    #: total:0 pages that were RETRIED (counted once per retry attempt, per
+    #: endpoint). Distinct from bundles_with_total_zero_by_endpoint, which
+    #: now counts only EXHAUSTION - a total:0 that persisted through every
+    #: retry attempt and became a real failure. A transient total:0 that a
+    #: retry recovered shows up here but not there, so
+    #: suspected_silent_failure keeps meaning "data actually at risk"
+    #: rather than "a blip retry already fixed".
+    total_zero_retries_by_endpoint: dict[str, int] = field(default_factory=dict)
+    #: Resumed location-enumeration cursors that turned out stale (expired
+    #: server-side ~17min idle TTL, detected via the total:0 signature) and
+    #: were recovered by a clean restart-from-scratch. A recovered restart
+    #: is NOT a silent failure - the reclassification in
+    #: StateScopedDiscovery._run_location_enumeration moves the count here
+    #: so a healthy recovered run doesn't fail its completeness gate.
+    stale_cursor_restarts: int = 0
 
     def record_bundle_health(self, bundle: dict[str, Any], endpoint: str) -> None:
         """Call once per fetched bundle, for every endpoint, both the
@@ -287,27 +302,88 @@ def _default_async_page_fetcher(
     return fetch
 
 
+class SilentTotalZeroError(Exception):
+    """A fetch returned HTTP 200 with the ``"total": 0`` silent-failure
+    signature and it persisted through every retry attempt.
+
+    ``total: 0`` is never legitimate on this server - a genuinely empty
+    search result omits ``total`` entirely (established live during the
+    Phase E investigation, and re-confirmed by both release-gate runs:
+    15,000+ genuinely-empty role queries carried no ``total`` key while the
+    2-3 silent-failure pages did). Before this existed, a total:0 page was
+    only *counted* (``DiscoveryStats.record_bundle_health``) - the run
+    still exited 0 and its checkpoint was marked complete, so silently
+    incomplete data entered the canonical graph flagged only on stdout.
+    Now the page is retried like any transient server error, and if it
+    persists this error flows into the same per-batch error machinery
+    (``mark_error`` / ``failed_batches`` / no ``mark_complete``) that
+    already makes HTTP failures resumable.
+    """
+
+
+def _check_total_zero(
+    bundle: dict[str, Any],
+    endpoint: str,
+    url: str,
+    stats: DiscoveryStats,
+    attempt: int,
+    max_attempts: int,
+) -> SilentTotalZeroError | None:
+    """Shared total:0 handling for both retry wrappers: returns the error
+    to retry/raise (recording it in stats), or ``None`` if the bundle is
+    healthy. Counts every retried attempt in
+    ``total_zero_retries_by_endpoint``; counts EXHAUSTION ONLY in
+    ``bundles_with_total_zero_by_endpoint``, so
+    ``suspected_silent_failure`` fires on data actually at risk, not on a
+    blip a retry recovered."""
+    if bundle.get("total") != 0:
+        return None
+    stats.total_zero_retries_by_endpoint[endpoint] = (
+        stats.total_zero_retries_by_endpoint.get(endpoint, 0) + 1
+    )
+    if attempt >= max_attempts - 1:
+        stats.bundles_with_total_zero_by_endpoint[endpoint] = (
+            stats.bundles_with_total_zero_by_endpoint.get(endpoint, 0) + 1
+        )
+    return SilentTotalZeroError(
+        f"{endpoint} bundle carried the total:0 silent-failure signature: {url}"
+    )
+
+
 async def _fetch_with_retry(
-    fetch: AsyncPageFetcher, url: str, retry_config: RetryConfig, stats: DiscoveryStats
+    fetch: AsyncPageFetcher,
+    url: str,
+    retry_config: RetryConfig,
+    stats: DiscoveryStats,
+    endpoint: str,
 ) -> dict[str, Any]:
     """Retry/backoff wrapper reusing the project's existing ``RetryConfig``
     (``config.retries``) rather than inventing Cigna-specific retry
     semantics - see the concurrency design doc's "retry/backoff strategy"
-    section for why. Only retries HTTP statuses ``retry_config`` already
-    considers retryable (429/500/502/503/504 by default) plus transport-level
-    failures (timeouts, connection errors); a non-retryable HTTP error (e.g.
-    a malformed batch query) raises immediately - retrying won't fix it.
+    section for why. Retries HTTP statuses ``retry_config`` already
+    considers retryable (429/500/502/503/504 by default), transport-level
+    failures (timeouts, connection errors), and HTTP-200 bundles carrying
+    the ``total: 0`` silent-failure signature (see
+    :class:`SilentTotalZeroError`); a non-retryable HTTP error (e.g. a
+    malformed batch query) raises immediately - retrying won't fix it.
     """
     last_exc: Exception | None = None
     for attempt in range(retry_config.max_attempts):
         try:
-            return await fetch(url)
+            bundle = await fetch(url)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in retry_config.retry_on_status:
                 raise
             last_exc = exc
         except httpx.TransportError as exc:
             last_exc = exc
+        else:
+            silent = _check_total_zero(
+                bundle, endpoint, url, stats, attempt, retry_config.max_attempts
+            )
+            if silent is None:
+                return bundle
+            last_exc = silent
         if attempt < retry_config.max_attempts - 1:
             stats.retry_count += 1
             delay = min(
@@ -319,12 +395,17 @@ async def _fetch_with_retry(
 
 
 def _fetch_with_retry_sync(
-    fetch: PageFetcher, url: str, retry_config: RetryConfig, stats: DiscoveryStats
+    fetch: PageFetcher,
+    url: str,
+    retry_config: RetryConfig,
+    stats: DiscoveryStats,
+    endpoint: str,
 ) -> dict[str, Any]:
     """Sync counterpart to :func:`_fetch_with_retry`, same retry/backoff
-    semantics, for ``_fetch_timed`` - the Location-enumeration and
-    sequential (``max_concurrent=1``, the default) PractitionerRole fetch
-    path, neither of which runs inside an event loop.
+    semantics (including total:0 handling), for ``_fetch_timed`` - the
+    Location-enumeration and sequential (``max_concurrent=1``, the default)
+    PractitionerRole fetch path, neither of which runs inside an event
+    loop.
 
     This did not exist until a live production-scale run hit a transient
     ``502`` during Location enumeration and crashed the entire multi-hour
@@ -336,13 +417,20 @@ def _fetch_with_retry_sync(
     last_exc: Exception | None = None
     for attempt in range(retry_config.max_attempts):
         try:
-            return fetch(url)
+            bundle = fetch(url)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in retry_config.retry_on_status:
                 raise
             last_exc = exc
         except httpx.TransportError as exc:
             last_exc = exc
+        else:
+            silent = _check_total_zero(
+                bundle, endpoint, url, stats, attempt, retry_config.max_attempts
+            )
+            if silent is None:
+                return bundle
+            last_exc = silent
         if attempt < retry_config.max_attempts - 1:
             stats.retry_count += 1
             delay = min(
@@ -619,7 +707,7 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
 
     def _fetch_timed(self, url: str, endpoint: str, stats: DiscoveryStats, is_continuation: bool) -> dict[str, Any]:
         started = time.monotonic()
-        bundle = _fetch_with_retry_sync(self._page_fetcher, url, self._retry_config, stats)
+        bundle = _fetch_with_retry_sync(self._page_fetcher, url, self._retry_config, stats, endpoint)
         stats.record_bundle_health(bundle, endpoint)
         stats.record_request(endpoint, time.monotonic() - started, is_continuation)
         return bundle
@@ -725,7 +813,9 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
         fetch = _default_async_page_fetcher(client, self._user_agent, self._fetch_timeout)
         while url:
             started = time.monotonic()
-            bundle = await _fetch_with_retry(fetch, url, self._retry_config, stats)
+            bundle = await _fetch_with_retry(
+                fetch, url, self._retry_config, stats, "PractitionerRole"
+            )
             stats.record_bundle_health(bundle, "PractitionerRole")
             stats.record_request("PractitionerRole", time.monotonic() - started, is_continuation)
             for entry in bundle.get("entry", []) or []:

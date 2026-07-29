@@ -784,6 +784,9 @@ class TestSilentFailureInstrumentation:
 
     def test_total_zero_bundle_is_detected(self, config: Config) -> None:
         config.providers.cigna_fhir_state = "RI"
+        config.retries.max_attempts = 2  # fast: one retry, no real backoff
+        config.retries.backoff_base_seconds = 0.001
+        config.retries.backoff_max_seconds = 0.01
         pc = config.providers
         location_url = _location_search_url(pc.cigna_fhir_base_url, "RI", pc.cigna_fhir_page_size)
         role_url_a = _practitioner_role_by_location_url(
@@ -801,10 +804,155 @@ class TestSilentFailureInstrumentation:
                 role_url_b: total_zero_bundle,
             },
         )
-        list(adapter.discover())
+        records = list(adapter.discover())
         stats = adapter.last_discovery_stats
+        # Counted once at EXHAUSTION (persisted through both attempts), not
+        # once per attempt - suspected_silent_failure means "data actually
+        # at risk", and a retried-and-recovered blip must not trip it.
         assert stats.bundles_with_total_zero_by_endpoint == {"PractitionerRole": 1}
+        assert stats.total_zero_retries_by_endpoint == {"PractitionerRole": 2}
         assert stats.suspected_silent_failure is True
+        # The poisoned batch is now a FAILED batch (resume will re-fetch
+        # it), not silently-empty data marked done.
+        assert len(stats.failed_batches) == 1
+        # The healthy batch still yields - one bad batch never aborts a run.
+        assert {r["practitioner"]["id"] for r in records} == {"practitioner-ri"}
+
+    def test_transient_total_zero_recovered_by_retry_is_not_a_failure(
+        self, config: Config
+    ) -> None:
+        """A total:0 page that a retry fixes is a blip, not a silent
+        failure: the run must complete clean, with the recovery visible
+        only in the retry counter."""
+        config.providers.cigna_fhir_state = "RI"
+        config.retries.max_attempts = 2
+        config.retries.backoff_base_seconds = 0.001
+        config.retries.backoff_max_seconds = 0.01
+        pc = config.providers
+        location_url = _location_search_url(pc.cigna_fhir_base_url, "RI", pc.cigna_fhir_page_size)
+        role_url_a = _practitioner_role_by_location_url(
+            pc.cigna_fhir_base_url, "loc-a", pc.cigna_fhir_page_size
+        )
+        role_url_b = _practitioner_role_by_location_url(
+            pc.cigna_fhir_base_url, "loc-b", pc.cigna_fhir_page_size
+        )
+        total_zero_bundle = {"resourceType": "Bundle", "type": "searchset", "link": [], "total": 0}
+        calls: dict[str, int] = {}
+
+        def flaky(url: str) -> dict:  # type: ignore[type-arg]
+            calls[url] = calls.get(url, 0) + 1
+            if url == role_url_b and calls[url] == 1:
+                return total_zero_bundle  # transient - healthy on retry
+            return {
+                location_url: STATE_LOCATION_BUNDLE,
+                role_url_a: STATE_ROLE_BUNDLE,
+                role_url_b: _EMPTY_BUNDLE,
+            }[url]
+
+        adapter = CignaFhirAdapter(config, page_fetcher=flaky)
+        records = list(adapter.discover())
+        stats = adapter.last_discovery_stats
+        assert calls[role_url_b] == 2  # one total:0, one clean retry
+        assert stats.total_zero_retries_by_endpoint == {"PractitionerRole": 1}
+        assert stats.bundles_with_total_zero_by_endpoint == {}  # never exhausted
+        assert stats.suspected_silent_failure is False
+        assert stats.failed_batches == []
+        assert {r["practitioner"]["id"] for r in records} == {"practitioner-ri"}
+
+    def test_fresh_enumeration_total_zero_fails_the_run_loudly(
+        self, config: Config
+    ) -> None:
+        """A persistent total:0 on a FRESH location-enumeration walk (no
+        resumed cursor to blame) is a genuine silent failure: the old
+        behavior recorded an undercounted enumeration as normal completion;
+        it must now fail the run."""
+        config.providers.cigna_fhir_state = "RI"
+        config.retries.max_attempts = 1  # exhaust immediately, zero sleeps
+        pc = config.providers
+        location_url = _location_search_url(pc.cigna_fhir_base_url, "RI", pc.cigna_fhir_page_size)
+        total_zero_bundle = {"resourceType": "Bundle", "type": "searchset", "link": [], "total": 0}
+        adapter = _adapter_with_pages(config, {location_url: total_zero_bundle})
+
+        from adapters.providers.cigna_fhir.adapter import SilentTotalZeroError
+
+        with pytest.raises(SilentTotalZeroError):
+            list(adapter.discover())
+        stats = adapter.last_discovery_stats
+        assert stats.bundles_with_total_zero_by_endpoint == {"Location": 1}
+
+    def test_unscoped_walk_failure_is_recorded_not_raised(
+        self, config: Config, initial_url: str
+    ) -> None:
+        """The unscoped path had no error containment at all - any fetch
+        failure propagated a raw traceback out of discover() with the run
+        row left unfinished. It must instead be recorded like every other
+        batch failure (blocking mark_complete via had_errors)."""
+        config.retries.max_attempts = 1
+        adapter = _adapter_with_pages(config, {})  # every URL raises KeyError
+
+        records = list(adapter.discover())
+        stats = adapter.last_discovery_stats
+        assert records == []
+        assert len(stats.failed_batches) == 1
+        assert stats.failed_batches[0][0] == "unscoped"
+
+    def test_persistent_total_zero_batch_is_refetched_on_resume(
+        self, config: Config, tmp_path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """The whole point of retry-then-ERROR over detect-and-continue: a
+        poisoned batch is marked error (not done-with-empty-data), the run
+        is not marked complete, and a later resume re-fetches exactly that
+        batch and recovers its data."""
+        config.providers.cigna_fhir_state = "RI"
+        config.retries.max_attempts = 1
+        pc = config.providers
+        location_url = _location_search_url(pc.cigna_fhir_base_url, "RI", pc.cigna_fhir_page_size)
+        role_url_a = _practitioner_role_by_location_url(
+            pc.cigna_fhir_base_url, "loc-a", pc.cigna_fhir_page_size
+        )
+        role_url_b = _practitioner_role_by_location_url(
+            pc.cigna_fhir_base_url, "loc-b", pc.cigna_fhir_page_size
+        )
+        total_zero_bundle = {"resourceType": "Bundle", "type": "searchset", "link": [], "total": 0}
+        checkpoint_path = tmp_path / "checkpoints.db"
+
+        # Run 1: loc-a's batch (which carries the practitioner) is poisoned.
+        cp1 = CheckpointStore(checkpoint_path)
+        adapter1 = CignaFhirAdapter(
+            config,
+            page_fetcher=make_fetcher(
+                {
+                    location_url: STATE_LOCATION_BUNDLE,
+                    role_url_a: total_zero_bundle,
+                    role_url_b: _EMPTY_BUNDLE,
+                }
+            ),
+            checkpoint_store=cp1,
+        )
+        records1 = list(adapter1.discover())
+        assert records1 == []  # the practitioner lived in the poisoned batch
+        assert cp1.status("cigna_fhir:RI", "practitioner_role_by_location", "0") == "error"
+        assert cp1.is_complete("cigna_fhir:RI") is False  # gated by had_errors
+        cp1.close()
+
+        # Run 2: server healthy again - only the errored batch re-fetches,
+        # and its data is recovered in full.
+        cp2 = CheckpointStore(checkpoint_path)
+        fetch2, calls2 = _counting_fetcher(
+            {
+                location_url: STATE_LOCATION_BUNDLE,
+                role_url_a: STATE_ROLE_BUNDLE,
+                role_url_b: _EMPTY_BUNDLE,
+            }
+        )
+        adapter2 = CignaFhirAdapter(config, page_fetcher=fetch2, checkpoint_store=cp2)
+        records2 = list(adapter2.discover())
+        assert location_url not in calls2  # enumeration replayed from checkpoint
+        assert calls2[role_url_a] == 1  # the errored batch, re-fetched
+        assert role_url_b not in calls2  # the done batch, NOT re-fetched
+        assert {r["practitioner"]["id"] for r in records2} == {"practitioner-ri"}
+        assert cp2.is_complete("cigna_fhir:RI") is True
+        cp2.close()
 
     def test_genuinely_empty_bundle_is_not_flagged_as_silent_failure(
         self, config: Config
@@ -983,11 +1131,15 @@ class TestSilentFailureInstrumentation:
     ) -> None:
         """The async fetch path (_fetch_role_page_entries_async) has its own
         bundle-fetch loop that bypasses _fetch_timed - this pins that it
-        still calls record_bundle_health, since it would be easy to add a
-        new sync-path check and forget the concurrent one exists."""
+        applies the same retry-then-error total:0 handling, since it would
+        be easy to change the sync path and forget the concurrent one
+        exists."""
         config.providers.cigna_fhir_state = "RI"
         config.providers.cigna_fhir_page_size = 1
         config.providers.cigna_fhir_max_concurrent_requests = 5
+        config.retries.max_attempts = 2
+        config.retries.backoff_base_seconds = 0.001
+        config.retries.backoff_max_seconds = 0.01
         location_url, role_url_a, role_url_b = _two_batch_urls(config)
         batch_a, _batch_b = _two_batches()
         total_zero_bundle = {"resourceType": "Bundle", "type": "searchset", "link": [], "total": 0}
@@ -1002,7 +1154,9 @@ class TestSilentFailureInstrumentation:
 
         stats = adapter.last_discovery_stats
         assert stats.bundles_with_total_zero_by_endpoint == {"PractitionerRole": 1}
+        assert stats.total_zero_retries_by_endpoint == {"PractitionerRole": 2}
         assert stats.suspected_silent_failure is True
+        assert len(stats.failed_batches) == 1  # identical error path to sequential
 
 
 class TestLocationEnumerationResumability:
@@ -1089,10 +1243,20 @@ class TestLocationEnumerationResumability:
         """The saved cursor from run 1 is dead by the time run 2 starts
         (returns the total:0 signature) - the resume must be abandoned and
         the walk redone from page 1, still producing the complete, correct
-        result. This is the exact failure mode of a real Cigna cursor
-        expiring across a long interruption (measured ~17min idle TTL)."""
+        result, with the recovery reclassified as a stale-cursor restart
+        rather than a silent failure. This is the exact failure mode of a
+        real Cigna cursor expiring across a long interruption (measured
+        ~17min idle TTL).
+
+        The stale response is served only on the FIRST hit of page2_url
+        (the doomed resume); the restart's own walk gets the real page.
+        That mirrors reality - a fresh walk mints a fresh server cursor -
+        and matters for the assertion set: a page that stays total:0 on the
+        restart too is a GENUINE silent failure and now correctly fails the
+        run (previously it silently dropped page 2's locations)."""
         config.providers.cigna_fhir_state = "RI"
         config.providers.cigna_fhir_page_size = 1
+        config.retries.max_attempts = 1  # exhaust the stale cursor with zero sleeps
         page1_url, page2_url, role_url_a, role_url_b = self._urls(config)
         page1, page2 = self._location_pages(page2_url)
         total_zero_bundle = {"resourceType": "Bundle", "type": "searchset", "link": [], "total": 0}
@@ -1105,29 +1269,42 @@ class TestLocationEnumerationResumability:
             list(adapter1.discover())
         cp1.close()
 
-        # Run 2: the saved cursor (page2_url) is now stale and returns
-        # total:0. A FRESH walk from page1_url must still work.
+        # Run 2: the saved cursor (page2_url) is stale on first hit, real
+        # afterwards. A FRESH walk from page1_url must still work.
         cp2 = CheckpointStore(checkpoint_path)
-        fetch2, calls2 = _counting_fetcher(
-            {
-                page1_url: page1,
-                page2_url: total_zero_bundle,
-                role_url_a: STATE_ROLE_BUNDLE,
-                role_url_b: _EMPTY_BUNDLE,
-            }
-        )
+        calls2: dict[str, int] = {}
+        pages2 = {
+            page1_url: page1,
+            page2_url: page2,
+            role_url_a: STATE_ROLE_BUNDLE,
+            role_url_b: _EMPTY_BUNDLE,
+        }
+
+        def fetch2(url: str) -> dict:  # type: ignore[type-arg]
+            calls2[url] = calls2.get(url, 0) + 1
+            if url == page2_url and calls2[url] == 1:
+                return total_zero_bundle  # the expired resume cursor
+            return pages2[url]
+
         adapter2 = CignaFhirAdapter(config, page_fetcher=fetch2, checkpoint_store=cp2)
         records = list(adapter2.discover())
+        stats = adapter2.last_discovery_stats
 
-        # page1_url is fetched TWICE: once by the doomed resume attempt
-        # (page2_url alone can't be walked without re-deriving page1's data,
-        # so the restart re-walks from page1_url), proving the fallback
-        # genuinely restarted rather than silently accepting partial data.
+        # The restart re-walked from page1_url (the resume alone can't
+        # re-derive page 1's data), proving a genuine clean restart rather
+        # than silent acceptance of partial data.
         assert calls2[page1_url] >= 1
-        assert calls2[page2_url] >= 1
+        assert calls2[page2_url] == 2  # stale attempt + the restart's real fetch
         assert {r["practitioner"]["id"] for r in records} == {"practitioner-ri"}
+        # Reclassification: a RECOVERED stale cursor is not a silent
+        # failure - the completeness gate must not fail this healthy run.
+        assert stats.stale_cursor_restarts == 1
+        assert stats.bundles_with_total_zero_by_endpoint == {}
+        assert stats.suspected_silent_failure is False
+        assert stats.failed_batches == []
         assert cp2.done_payloads("cigna_fhir:RI", "location_enumeration_pages") == {}
         assert cp2.status("cigna_fhir:RI", "location_enumeration", "all") == "done"
+        assert cp2.is_complete("cigna_fhir:RI") is True  # restart must not set had_errors
         cp2.close()
 
     def test_completed_run_leaves_no_leftover_per_page_checkpoint_items(
@@ -1760,3 +1937,87 @@ class TestPracticeNameAddressFiltering:
         normalized = adapter.normalize(extracted)
         assert normalized.provider.practice_name == "Westerly Family Medicine Clinic"
         assert normalized.provider.primary_site_of_care == "Westerly Family Medicine Clinic"
+
+
+class _StubDatasetAdapter:
+    """Duck-typed ProviderDatasetAdapter for CLI completion-gate tests: no
+    network, no records - just a canned DiscoveryStats whose health verdict
+    the exit-code gate must honor."""
+
+    name = "stub"
+    source = "Stub"
+    requires_profile_url = False
+
+    #: Set by the test before cmd_ingest_providers runs.
+    canned_stats = None
+
+    def __init__(self, config: Config, checkpoint_store=None) -> None:  # type: ignore[no-untyped-def]
+        self.config = config
+        self.last_request_count = 0
+        self.last_discovery_stats = type(self).canned_stats
+
+    def discover(self):  # type: ignore[no-untyped-def]
+        yield from []
+
+
+class TestIngestProvidersCompletionGate:
+    """cmd_ingest_providers must exit nonzero when the run is incomplete
+    (silent-failure signature, failed batches, errors, or an aborting
+    exception) - previously every run exited 0, including both live
+    release-gate runs that printed the silent-failure banner."""
+
+    def _run_cmd(self, config: Config, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        import argparse
+
+        from providermap import cli as cli_module
+
+        config.database.path = str(tmp_path / "gate.db")
+        config.providers.checkpoint_path = None
+        monkeypatch.setattr(
+            cli_module, "get_provider_dataset_adapter_class", lambda name: _StubDatasetAdapter
+        )
+        args = argparse.Namespace(dry_run=True, provider_adapter="stub", discovery_mode=None)
+        cli_module.cmd_ingest_providers(config, args)
+
+    def test_clean_run_exits_zero(self, config: Config, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        from adapters.providers.cigna_fhir.adapter import DiscoveryStats
+
+        _StubDatasetAdapter.canned_stats = DiscoveryStats()
+        # Returning without SystemExit IS the assertion.
+        self._run_cmd(config, tmp_path, monkeypatch)
+
+    def test_silent_failure_signature_exits_nonzero(
+        self, config: Config, tmp_path, monkeypatch
+    ) -> None:  # type: ignore[no-untyped-def]
+        from adapters.providers.cigna_fhir.adapter import DiscoveryStats
+
+        stats = DiscoveryStats()
+        stats.bundles_with_total_zero_by_endpoint["PractitionerRole"] = 1
+        _StubDatasetAdapter.canned_stats = stats
+        with pytest.raises(SystemExit) as excinfo:
+            self._run_cmd(config, tmp_path, monkeypatch)
+        assert excinfo.value.code == 1
+
+    def test_failed_batches_exit_nonzero(
+        self, config: Config, tmp_path, monkeypatch
+    ) -> None:  # type: ignore[no-untyped-def]
+        from adapters.providers.cigna_fhir.adapter import DiscoveryStats
+
+        stats = DiscoveryStats()
+        stats.failed_batches.append(("7", "RuntimeError('boom')"))
+        _StubDatasetAdapter.canned_stats = stats
+        with pytest.raises(SystemExit) as excinfo:
+            self._run_cmd(config, tmp_path, monkeypatch)
+        assert excinfo.value.code == 1
+
+    def test_recovered_stale_cursor_restart_still_exits_zero(
+        self, config: Config, tmp_path, monkeypatch
+    ) -> None:  # type: ignore[no-untyped-def]
+        """The reclassification contract end to end: a stale-cursor restart
+        that recovered is healthy - it must not fail the gate."""
+        from adapters.providers.cigna_fhir.adapter import DiscoveryStats
+
+        stats = DiscoveryStats()
+        stats.stale_cursor_restarts = 1
+        _StubDatasetAdapter.canned_stats = stats
+        self._run_cmd(config, tmp_path, monkeypatch)  # no SystemExit

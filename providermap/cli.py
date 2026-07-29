@@ -580,70 +580,97 @@ def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
     seen_org_keys: set[tuple[str | None, str | None]] = set()
     started_at = datetime.now(timezone.utc)
 
-    for raw in adapter.discover():
-        try:
-            normalized = adapter.normalize(adapter.extract(raw))
-        except Exception:
-            tally["errors"] += 1
-            log.exception("Failed to process one %s record", adapter.name)
-            continue
+    # A discovery-level failure (e.g. the location enumeration hitting a
+    # persistent total:0 silent-failure page on a fresh walk) must still
+    # reach finish_run and the summary below - a run row left with
+    # finished_at NULL and no recorded outcome is how failures get lost.
+    # The failure is re-surfaced as a nonzero exit at the end instead.
+    fatal_error: Exception | None = None
+    try:
+        for raw in adapter.discover():
+            try:
+                normalized = adapter.normalize(adapter.extract(raw))
+            except Exception:
+                tally["errors"] += 1
+                log.exception("Failed to process one %s record", adapter.name)
+                continue
 
-        tally["practitioners_discovered"] += 1
-        provider = normalized.provider
+            tally["practitioners_discovered"] += 1
+            provider = normalized.provider
 
-        is_valid, problems = validate_provider(provider, npi_policy)
-        if not is_valid:
-            tally["excluded"] += 1
-            log.info(
-                "Excluding %s provider %s: %s",
-                adapter.name,
-                provider.npi or provider.full_name,
-                "; ".join(problems),
-            )
-            continue
+            is_valid, problems = validate_provider(provider, npi_policy)
+            if not is_valid:
+                tally["excluded"] += 1
+                log.info(
+                    "Excluding %s provider %s: %s",
+                    adapter.name,
+                    provider.npi or provider.full_name,
+                    "; ".join(problems),
+                )
+                continue
 
-        existing = db.get_provider(npi=provider.npi) if provider.npi else None
-        if existing is None:
-            provider_id, _ = db.upsert_provider(provider)
-            tally["new_npis"] += 1
-        else:
-            # Known NPI: leave the existing provider row untouched - Cigna
-            # only contributes the location/organization links below.
-            provider_id = existing.provider_id
-            tally["existing_npis"] += 1
+            existing = db.get_provider(npi=provider.npi) if provider.npi else None
+            if existing is None:
+                provider_id, _ = db.upsert_provider(provider)
+                tally["new_npis"] += 1
+            else:
+                # Known NPI: leave the existing provider row untouched - Cigna
+                # only contributes the location/organization links below.
+                provider_id = existing.provider_id
+                tally["existing_npis"] += 1
 
-        for i, loc in enumerate(normalized.locations):
-            if loc.address_key not in seen_location_keys:
-                seen_location_keys.add(loc.address_key)
-            location_id = db.upsert_location(loc)
-            if provider_id is not None and location_id is not None:
-                # enrich_only=True: this source's own discovery may be
-                # scope-limited (see CignaFhirAdapter's state_scoped vs
-                # national modes) - a later, differently-scoped pass must
-                # only ever add relationships, never re-litigate which
-                # location is already primary (Risk R1, see
-                # Database.link()'s docstring).
-                db.link(provider_id, location_id, is_primary=(i == 0), enrich_only=True)
+            for i, loc in enumerate(normalized.locations):
+                if loc.address_key not in seen_location_keys:
+                    seen_location_keys.add(loc.address_key)
+                location_id = db.upsert_location(loc)
+                if provider_id is not None and location_id is not None:
+                    # enrich_only=True: this source's own discovery may be
+                    # scope-limited (see CignaFhirAdapter's state_scoped vs
+                    # national modes) - a later, differently-scoped pass must
+                    # only ever add relationships, never re-litigate which
+                    # location is already primary (Risk R1, see
+                    # Database.link()'s docstring).
+                    db.link(provider_id, location_id, is_primary=(i == 0), enrich_only=True)
 
-        for org, _relationship in normalized.organizations:
-            org_key = (org.source, org.source_id)
-            if org_key not in seen_org_keys:
-                seen_org_keys.add(org_key)
-            organization_id, _ = db.upsert_organization(org)
-            if provider_id is not None and organization_id is not None:
-                db.link_provider_organization(provider_id, organization_id, source=adapter.source)
+            for org, _relationship in normalized.organizations:
+                org_key = (org.source, org.source_id)
+                if org_key not in seen_org_keys:
+                    seen_org_keys.add(org_key)
+                organization_id, _ = db.upsert_organization(org)
+                if provider_id is not None and organization_id is not None:
+                    db.link_provider_organization(provider_id, organization_id, source=adapter.source)
+    except Exception as exc:
+        fatal_error = exc
+        log.exception("Discovery aborted for %s - recording the partial run", adapter.name)
 
     runtime_seconds = (datetime.now(timezone.utc) - started_at).total_seconds()
     request_count = getattr(adapter, "last_request_count", None)
     stats = getattr(adapter, "last_discovery_stats", None)
 
+    # Completeness verdict, shared by the runs-table notes, the printed
+    # summary, and the exit code below. A run is only "clean" when nothing
+    # failed AND no silent-failure signature survived retries - detected
+    # incompleteness that still exits 0 is how bad data reaches the
+    # canonical graph unnoticed (both release-gate RI runs carried total:0
+    # signatures and exited 0 before this existed).
+    silent_failure = bool(getattr(stats, "suspected_silent_failure", False))
+    failed_batch_count = len(getattr(stats, "failed_batches", []) or [])
+    stale_restarts = getattr(stats, "stale_cursor_restarts", 0)
+    run_failed = (
+        fatal_error is not None
+        or tally["errors"] > 0
+        or failed_batch_count > 0
+        or silent_failure
+    )
+
     # Reuses the existing generic runs columns rather than adding
     # dataset-adapter-specific ones: urls_discovered/providers_new/
     # providers_changed map onto practitioners discovered/new NPIs/existing
     # NPIs, and whatever has no matching column (locations/organizations
-    # discovered, request count) goes in notes - the same "no dedicated
-    # column, use notes" convention finish_run's other call sites already
-    # follow.
+    # discovered, request count, completeness verdict) goes in notes - the
+    # same "no dedicated column, use notes" convention finish_run's other
+    # call sites already follow.
+    status_note = "INCOMPLETE" if run_failed else "ok"
     db.finish_run(
         urls_discovered=tally["practitioners_discovered"],
         providers_new=tally["new_npis"],
@@ -652,8 +679,11 @@ def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
         errors=tally["errors"],
         source_used=adapter.name,
         notes=(
-            f"locations={len(seen_location_keys)} organizations={len(seen_org_keys)} "
-            f"requests={request_count} runtime={runtime_seconds:.1f}s"
+            f"status={status_note} locations={len(seen_location_keys)} "
+            f"organizations={len(seen_org_keys)} requests={request_count} "
+            f"runtime={runtime_seconds:.1f}s failed_batches={failed_batch_count} "
+            f"silent_failure={silent_failure} stale_restarts={stale_restarts}"
+            + (f" aborted={type(fatal_error).__name__}" if fatal_error is not None else "")
         )[:200],
     )
 
@@ -707,6 +737,11 @@ def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
         )
         total_zero = dict(stats.bundles_with_total_zero_by_endpoint)
         print(f"  bundles with total:0     : {total_zero if total_zero else 'none'}")
+        total_zero_retried = dict(getattr(stats, "total_zero_retries_by_endpoint", {}) or {})
+        if total_zero_retried:
+            print(f"  total:0 pages retried    : {total_zero_retried}")
+        if stale_restarts:
+            print(f"  stale cursor restarts    : {stale_restarts} (recovered cleanly)")
         roles = stats.distinct_resources_by_type.get("PractitionerRole", 0)
         print(
             f"  distinct roles / providers / relationships : "
@@ -730,6 +765,22 @@ def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
     resource_spool = getattr(adapter, "resource_spool", None)
     if resource_spool is not None:
         resource_spool.close()
+
+    # Completion gating: a run with errors, failed batches, a surviving
+    # silent-failure signature, or an aborting exception exits nonzero so
+    # schedulers/orchestrators (and humans reading $?) cannot mistake
+    # incomplete data for success. The checkpoint side of the same gate
+    # lives in the discovery strategies (had_errors blocks mark_complete),
+    # so an incomplete run also stays resumable.
+    if run_failed:
+        print(
+            "*** RUN INCOMPLETE - exiting nonzero "
+            f"(errors={tally['errors']} failed_batches={failed_batch_count} "
+            f"silent_failure={silent_failure}"
+            + (f" aborted={type(fatal_error).__name__}" if fatal_error is not None else "")
+            + ") ***\n"
+        )
+        sys.exit(1)
 
 
 async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> None:
