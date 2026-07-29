@@ -234,6 +234,12 @@ providers:
   # rather than silently using the unbounded cache this strategy avoids.
   resource_spool_path: null
 
+  # Route state-scoped discovery through the disk-backed spool instead of
+  # in-memory dicts (measured 6.07 GB peak RSS on the smallest state).
+  # false preserves the original behavior exactly; true requires
+  # resource_spool_path. Both modes produce identical output (tested).
+  cigna_fhir_state_scoped_spool: false
+
   # How many spool writes accumulate before committing to disk - same
   # batching and same measured motivation as checkpoint_commit_every.
   # Safe because the spool is always flushed before any checkpoint marker

@@ -58,8 +58,12 @@ FetchPageEntries = Callable[[str | None, DiscoveryStats], list[dict[str, Any]]]
 #: incremental progress for resumability. Only fetch_location_page_entries
 #: uses the callback; fetch_role_page_entries' own per-location granularity
 #: already makes it resumable without one (see _handle_batch_result).
+#: 4th param is ``collect`` - ``False`` makes the walk genuinely streaming
+#: (pages go to the callback and are dropped; the return value is empty).
+#: Spool mode MUST pass ``False`` or the internal list re-materializes the
+#: whole state in memory anyway - see the adapter method's docstring.
 FetchLocationPageEntries = Callable[
-    [str | None, DiscoveryStats, Callable[[list[dict[str, Any]], str | None], None] | None],
+    [str | None, DiscoveryStats, Callable[[list[dict[str, Any]], str | None], None] | None, bool],
     list[dict[str, Any]],
 ]
 ApplyLocationEntries = Callable[
@@ -112,11 +116,17 @@ class DiscoveryContext:
     fetch_batches_concurrently: FetchBatchesConcurrently
     apply_role_entries: ApplyRoleEntries
 
-    #: Only used by :class:`NationalDiscovery` - ``None`` for
-    #: :class:`StateScopedDiscovery`, which never touches these three.
+    #: Used by :class:`NationalDiscovery` (always) and by
+    #: :class:`StateScopedDiscovery` when ``state_scoped_spool`` is set -
+    #: ``None`` otherwise. ``window_days``/``lookback_days`` remain
+    #: national-only.
     resource_spool: ResourceSpool | None = None
     window_days: int = 30
     lookback_days: int = 3650
+    #: Route state-scoped discovery through the spool (see
+    #: ``config.providers.cigna_fhir_state_scoped_spool``). ``False`` (the
+    #: default) is the original in-memory behavior, byte for byte.
+    state_scoped_spool: bool = False
 
 
 class DiscoveryStrategy(ABC):
@@ -229,7 +239,7 @@ class StateScopedDiscovery(DiscoveryStrategy):
             next_index[0] += 1
 
         try:
-            new_entries = context.fetch_location_page_entries(resume_url, stats, _on_page)
+            new_entries = context.fetch_location_page_entries(resume_url, stats, _on_page, True)
         except SilentTotalZeroError:
             if not resuming:
                 # Fresh walk: a persistent total:0 page is a genuine silent
@@ -267,7 +277,264 @@ class StateScopedDiscovery(DiscoveryStrategy):
 
         context.apply_location_entries(reloaded_entries + new_entries, resources, location_ids, stats)
 
+    def _run_location_enumeration_spool(
+        self,
+        context: DiscoveryContext,
+        stats: DiscoveryStats,
+        cp: CheckpointStore | None,
+        checkpoint_id: str,
+        spool: ResourceSpool,
+        location_ids: list[str],
+    ) -> None:
+        """Spool-mode counterpart to :meth:`_run_location_enumeration`: pages
+        stream into ``spool`` via ``on_page`` with ``collect=False`` - no
+        whole-state list of Location BODIES ever exists in memory - and
+        every checkpoint payload here holds only the page's location IDS,
+        never bodies. Resumability, stale-cursor detection (via
+        :class:`~adapters.providers.cigna_fhir.adapter.SilentTotalZeroError`),
+        and the recursive-restart bound are otherwise identical to the
+        legacy method - see its docstring for the underlying cursor-TTL
+        rationale; only the payload shape differs.
+        """
+        resume_url = _location_search_url(context.base_url, context.state, context.page_size)
+        reloaded_ids: list[str] = []
+        next_page_index = 0
+        resuming = False
+
+        if cp is not None:
+            cursor_payload = cp.get_payload(
+                checkpoint_id, "location_enumeration_spool_cursor", "current"
+            )
+            if cursor_payload is not None and cursor_payload.get("next_url"):
+                for _key, page_payload in sorted(
+                    cp.done_payloads(checkpoint_id, "location_enumeration_spool_pages").items(),
+                    key=lambda kv: int(kv[0]),
+                ):
+                    reloaded_ids.extend(page_payload["location_ids"])
+                resume_url = cursor_payload["next_url"]
+                next_page_index = cursor_payload["next_page_index"]
+                resuming = True
+                log.info(
+                    "Resuming spool-mode location enumeration from a saved cursor "
+                    "(%d location ids already checkpointed from before the interruption)",
+                    len(reloaded_ids),
+                )
+
+        next_index = [next_page_index]
+        new_ids: list[str] = []
+
+        def _on_page(page_entries: list[dict[str, Any]], next_url: str | None) -> None:
+            _spool_entries(spool, page_entries, stats)
+            page_ids = [e["id"] for e in page_entries if e.get("id")]
+            new_ids.extend(page_ids)
+            if cp is not None:
+                cp.mark_done(
+                    checkpoint_id,
+                    "location_enumeration_spool_pages",
+                    str(next_index[0]),
+                    {"location_ids": page_ids},
+                )
+                # Durability ordering (see resource_spool.py's module
+                # docstring): this page's bodies must reach disk before the
+                # cursor marker that claims the page is done - the reverse
+                # order would let a crash produce a marker whose bodies
+                # never landed, and resume would silently skip them.
+                spool.flush()
+                cp.mark_done(
+                    checkpoint_id,
+                    "location_enumeration_spool_cursor",
+                    "current",
+                    {"next_url": next_url, "next_page_index": next_index[0] + 1},
+                )
+            next_index[0] += 1
+
+        try:
+            context.fetch_location_page_entries(resume_url, stats, _on_page, False)
+        except SilentTotalZeroError:
+            if not resuming:
+                raise
+            log.warning(
+                "Resumed spool-mode location-enumeration cursor was stale "
+                "(total:0 signature persisted through retries) - clearing "
+                "the spool and restarting the walk from scratch."
+            )
+            remaining = stats.bundles_with_total_zero_by_endpoint.get("Location", 0) - 1
+            if remaining > 0:
+                stats.bundles_with_total_zero_by_endpoint["Location"] = remaining
+            else:
+                stats.bundles_with_total_zero_by_endpoint.pop("Location", None)
+            stats.stale_cursor_restarts += 1
+            if cp is not None:
+                cp.clear_phase(checkpoint_id, "location_enumeration_spool_pages")
+                cp.clear_phase(checkpoint_id, "location_enumeration_spool_cursor")
+            # The doomed resume may have already spooled some of this
+            # walk's locations before hitting the stale page - discard them
+            # along with the checkpoint phases so the restart's fresh walk
+            # (resuming=False on the recursed call) starts from a clean
+            # slate, not a partially-populated one.
+            spool.clear()
+            self._run_location_enumeration_spool(
+                context, stats, cp, checkpoint_id, spool, location_ids
+            )
+            return
+
+        location_ids.extend(reloaded_ids + new_ids)
+
+    def _run_spool(self, context: DiscoveryContext) -> Iterator[dict[str, Any]]:
+        """Spool-backed counterpart to :meth:`run`: same observable
+        contract (yielded dict shape, ``DiscoveryStats`` semantics,
+        resumability guarantees) as the legacy in-memory path, but every
+        fetched resource is written to ``context.resource_spool`` instead
+        of an in-memory dict - memory stays O(one practitioner) regardless
+        of state size, mirroring :class:`NationalDiscovery`'s
+        spool-then-materialize pattern via the shared
+        ``_spool_entries``/``_materialize_from_spool`` helpers.
+        """
+        stats = context.stats
+        started_at = time.monotonic()
+        spool = context.resource_spool
+        if spool is None:
+            raise ValueError(
+                "cigna_fhir_state_scoped_spool requires providers.resource_spool_path "
+                "to be set (same requirement national mode already has)."
+            )
+
+        cp = context.checkpoint_store
+        # Distinct checkpoint id (":spool" suffix) - a flag flip mid-run is
+        # always a clean fresh start in either direction, never a misread
+        # of the other mode's checkpoint state or payload shapes.
+        checkpoint_id = f"{context.adapter_name}:{context.state or 'unscoped'}:spool"
+        if cp is not None and cp.start_or_resume(checkpoint_id):
+            log.info("Resuming checkpoint %s", checkpoint_id)
+        else:
+            # Fresh start: the spool persists across runs so RESUMES can
+            # reuse it, but rows left by a previous run/mode/scope must
+            # never leak into this run's materialize pass (they'd
+            # resurrect server-deleted resources and inflate yields).
+            spool.clear()
+        had_errors = False
+
+        if context.state:
+            location_ids: list[str] = []
+            if cp is not None and cp.status(checkpoint_id, "location_enumeration_spool", "all") == "done":
+                payload = cp.get_payload(checkpoint_id, "location_enumeration_spool", "all")
+                assert payload is not None
+                location_ids = payload["location_ids"]
+                log.info(
+                    "Checkpoint hit: spool-mode location_enumeration already done "
+                    "(%d locations)",
+                    len(location_ids),
+                )
+            else:
+                self._run_location_enumeration_spool(
+                    context, stats, cp, checkpoint_id, spool, location_ids
+                )
+                if cp is not None:
+                    cp.mark_done(
+                        checkpoint_id,
+                        "location_enumeration_spool",
+                        "all",
+                        {"location_ids": location_ids},
+                    )
+                    cp.clear_phase(checkpoint_id, "location_enumeration_spool_pages")
+                    cp.clear_phase(checkpoint_id, "location_enumeration_spool_cursor")
+
+            pending_batches: list[tuple[str, str]] = []
+            for location_id in location_ids:
+                # Keyed by LOCATION ID, not positional index: the spool
+                # already durably holds a done batch's data, so - unlike
+                # the legacy phase, which replays stored entries through
+                # apply_role_entries - resuming needs no replay at all.
+                if cp is not None and cp.status(
+                    checkpoint_id, "role_by_location_spool", location_id
+                ) == "done":
+                    continue
+                url = _practitioner_role_by_location_url(
+                    context.base_url, location_id, context.page_size
+                )
+                pending_batches.append((location_id, url))
+
+            def _handle_batch_result(
+                batch_key: str, result: list[dict[str, Any]] | Exception
+            ) -> None:
+                nonlocal had_errors
+                stats.role_queries_attempted += 1
+                if isinstance(result, Exception):
+                    had_errors = True
+                    stats.failed_batches.append((batch_key, repr(result)))
+                    if cp is not None:
+                        cp.mark_error(checkpoint_id, "role_by_location_spool", batch_key, repr(result))
+                    log.error(
+                        "PractitionerRole batch %s failed - continuing with remaining "
+                        "batches (this location's practitioners will be missing this "
+                        "run): %r",
+                        batch_key,
+                        result,
+                    )
+                    return
+                if not result:
+                    stats.role_queries_empty += 1
+                _spool_entries(spool, result, stats)
+                if cp is not None:
+                    # Durability ordering, same rule as location
+                    # enumeration above: spool before marker.
+                    spool.flush()
+                    cp.mark_done(checkpoint_id, "role_by_location_spool", batch_key, {})
+
+            if context.max_concurrent > 1 and pending_batches:
+                async def _consume_batches() -> None:
+                    async for batch_key, result in context.fetch_batches_concurrently(
+                        pending_batches, stats
+                    ):
+                        _handle_batch_result(batch_key, result)
+
+                asyncio.run(_consume_batches())
+            else:
+                for batch_key, url in pending_batches:
+                    try:
+                        entries: list[dict[str, Any]] | Exception = context.fetch_role_page_entries(
+                            url, stats
+                        )
+                    except Exception as exc:
+                        entries = exc
+                    _handle_batch_result(batch_key, entries)
+        else:
+            if cp is not None and cp.status(checkpoint_id, "practitioner_role_pages_spool", "all") == "done":
+                pass  # already spooled by a prior run of this same scope
+            else:
+                start_url = _unscoped_search_url(context.base_url, context.page_size)
+                try:
+                    entries = context.fetch_role_page_entries(start_url, stats)
+                except Exception as exc:  # noqa: BLE001
+                    had_errors = True
+                    stats.failed_batches.append(("unscoped", repr(exc)))
+                    log.error(
+                        "Unscoped PractitionerRole walk failed - this run "
+                        "discovered no providers and will not be marked "
+                        "complete: %r",
+                        exc,
+                    )
+                else:
+                    _spool_entries(spool, entries, stats)
+                    if cp is not None:
+                        spool.flush()
+                        cp.mark_done(checkpoint_id, "practitioner_role_pages_spool", "all", {})
+
+        yield from _materialize_from_spool(spool, stats, count_relationships=True)
+
+        stats.runtime_seconds = time.monotonic() - started_at
+        if cp is not None and not had_errors:
+            cp.mark_complete(checkpoint_id)
+
     def run(self, context: DiscoveryContext) -> Iterator[dict[str, Any]]:
+        # Spool mode is a separate, flag-gated implementation (see
+        # _run_spool) so the legacy in-memory path below stays byte-for-
+        # byte what it was - the existing suite is the regression guard
+        # for flag-off behavior.
+        if context.state_scoped_spool:
+            yield from self._run_spool(context)
+            return
+
         resources: dict[tuple[str, str], dict[str, Any]] = {}
         roles: list[dict[str, Any]] = []
         stats = context.stats
@@ -578,6 +845,69 @@ def _spool_entries(spool: ResourceSpool, entries: list[dict[str, Any]], stats: D
         spool.upsert(resource_type, resource_id, resource, practitioner_ref=practitioner_ref)
 
 
+def _materialize_from_spool(
+    spool: ResourceSpool, stats: DiscoveryStats, *, count_relationships: bool
+) -> Iterator[dict[str, Any]]:
+    """Yield one complete per-practitioner record per distinct spooled
+    practitioner, dereferencing locations/organizations from the spool -
+    O(one practitioner) memory regardless of how many resources are
+    spooled, since ``distinct_practitioner_refs()``/``roles_for_practitioner()``
+    are both bounded and ordered (deterministic emission, see
+    ResourceSpool's docstrings).
+
+    Shared by :class:`NationalDiscovery` and :class:`StateScopedDiscovery`'s
+    spool-mode path so the dereference/stats logic never drifts between
+    them. ``count_relationships`` is False for national (its stats never
+    tracked ``provider_location_relationships_discovered`` - preserving that
+    exactly) and True for state-scoped spool mode, to match the legacy
+    in-memory path's stat.
+    """
+    for practitioner_ref in spool.distinct_practitioner_refs():
+        practitioner = spool.get("Practitioner", practitioner_ref)
+        if practitioner is None:
+            stats.reference_misses += 1
+            log.warning(
+                "PractitionerRole(s) reference practitioner %s but it was never "
+                "spooled - skipping",
+                practitioner_ref,
+            )
+            continue
+        stats.reference_hits += 1
+
+        practitioner_roles = spool.roles_for_practitioner(practitioner_ref)
+        locations: dict[str, dict[str, Any]] = {}
+        organizations: dict[str, dict[str, Any]] = {}
+        for role in practitioner_roles:
+            for loc_ref in role.get("location", []) or []:
+                parsed = _parse_reference(loc_ref)
+                if not parsed:
+                    continue
+                loc = spool.get(*parsed)
+                if loc is not None:
+                    stats.reference_hits += 1
+                    locations[parsed[1]] = loc
+                else:
+                    stats.reference_misses += 1
+            org_ref = _parse_reference(role.get("organization"))
+            if org_ref:
+                org = spool.get(*org_ref)
+                if org is not None:
+                    stats.reference_hits += 1
+                    organizations[org_ref[1]] = org
+                else:
+                    stats.reference_misses += 1
+
+        stats.providers_yielded += 1
+        if count_relationships:
+            stats.provider_location_relationships_discovered += len(locations)
+        yield {
+            "practitioner": practitioner,
+            "roles": practitioner_roles,
+            "locations": locations,
+            "organizations": organizations,
+        }
+
+
 class NationalDiscovery(DiscoveryStrategy):
     """Unscoped national ``PractitionerRole`` traversal - see
     ``NATIONAL_DISCOVERY_DESIGN.md``'s national sequence diagram. Two
@@ -689,52 +1019,7 @@ class NationalDiscovery(DiscoveryStrategy):
                 _handle_window_result(window_key, entries)
 
         # --- Stage 2: materialize ---------------------------------------- #
-        # O(one practitioner) memory: distinct_practitioner_refs() is bounded
-        # by the number of practitioners, not the number of spooled
-        # resources, and each iteration below only ever holds one
-        # practitioner's own roles/locations/organizations at a time.
-        for practitioner_ref in spool.distinct_practitioner_refs():
-            practitioner = spool.get("Practitioner", practitioner_ref)
-            if practitioner is None:
-                stats.reference_misses += 1
-                log.warning(
-                    "PractitionerRole(s) reference practitioner %s but it was never "
-                    "spooled - skipping",
-                    practitioner_ref,
-                )
-                continue
-            stats.reference_hits += 1
-
-            practitioner_roles = spool.roles_for_practitioner(practitioner_ref)
-            locations: dict[str, dict[str, Any]] = {}
-            organizations: dict[str, dict[str, Any]] = {}
-            for role in practitioner_roles:
-                for loc_ref in role.get("location", []) or []:
-                    parsed = _parse_reference(loc_ref)
-                    if not parsed:
-                        continue
-                    loc = spool.get(*parsed)
-                    if loc is not None:
-                        stats.reference_hits += 1
-                        locations[parsed[1]] = loc
-                    else:
-                        stats.reference_misses += 1
-                org_ref = _parse_reference(role.get("organization"))
-                if org_ref:
-                    org = spool.get(*org_ref)
-                    if org is not None:
-                        stats.reference_hits += 1
-                        organizations[org_ref[1]] = org
-                    else:
-                        stats.reference_misses += 1
-
-            stats.providers_yielded += 1
-            yield {
-                "practitioner": practitioner,
-                "roles": practitioner_roles,
-                "locations": locations,
-                "organizations": organizations,
-            }
+        yield from _materialize_from_spool(spool, stats, count_relationships=False)
 
         stats.runtime_seconds = time.monotonic() - started_at
         if cp is not None and not had_errors:

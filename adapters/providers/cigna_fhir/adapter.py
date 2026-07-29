@@ -719,6 +719,7 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
         start_url: str | None,
         stats: DiscoveryStats,
         on_page: Callable[[list[dict[str, Any]], str | None], None] | None = None,
+        collect: bool = True,
     ) -> list[dict[str, Any]]:
         """Follow ``next`` links starting at ``start_url``, returning every
         raw ``Location`` resource dict encountered - fetch only, no
@@ -732,6 +733,13 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
         incremental per-page progress (see
         ``StateScopedDiscovery._run_location_enumeration``) without this
         method needing any awareness of checkpointing itself.
+
+        ``collect=False`` makes this genuinely streaming: pages are handed
+        to ``on_page`` and then dropped, and an empty list is returned.
+        Spool-mode callers MUST pass ``False`` - the whole point of the
+        spool is that no whole-state list of location bodies ever exists in
+        memory, and merely ignoring this method's return value would not
+        stop the internal list from materializing all ~42k of them anyway.
         """
         entries: list[dict[str, Any]] = []
         url = start_url
@@ -747,7 +755,8 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
                 and entry["resource"].get("resourceType") == "Location"
                 and entry["resource"].get("id")
             ]
-            entries.extend(page_entries)
+            if collect:
+                entries.extend(page_entries)
             next_url = _next_link(bundle)
             if on_page is not None:
                 on_page(page_entries, next_url)
@@ -940,6 +949,7 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
             fetch_batches_concurrently=self._fetch_batches_concurrently,
             apply_role_entries=self._apply_role_entries,
             resource_spool=self.resource_spool,
+            state_scoped_spool=self.config.providers.cigna_fhir_state_scoped_spool,
             window_days=self._window_days,
             lookback_days=self._lookback_days,
         )

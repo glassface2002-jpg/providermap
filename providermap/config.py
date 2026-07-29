@@ -283,6 +283,20 @@ class ProvidersConfig:
     # strategy exists specifically to avoid.
     resource_spool_path: str | None = None
 
+    # Route STATE-SCOPED discovery's resources through the disk-backed
+    # ResourceSpool instead of the in-memory dicts that were measured at
+    # 6.07 GB peak RSS on the smallest state tested (memory scaled with
+    # state size, capping which states could complete at all). False (the
+    # default) preserves the original in-memory behavior exactly; enabling
+    # requires resource_spool_path to be set (selecting it without one
+    # raises, same as national mode). The two modes are validated to
+    # produce identical output over shared fixtures - see
+    # tests/test_cigna_fhir_adapter.py::TestStateScopedSpoolEquivalence.
+    # Spool-mode runs checkpoint under a distinct id (":spool" suffix) so
+    # flipping this flag mid-interruption can never misread the other
+    # mode's checkpoint - a mode flip is always a clean fresh start.
+    cigna_fhir_state_scoped_spool: bool = False
+
     # How many spool writes accumulate before ResourceSpool commits to
     # disk - same batching, same rationale, and same measured motivation as
     # checkpoint_commit_every above (commit-per-write collapsed to
