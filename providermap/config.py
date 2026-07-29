@@ -283,6 +283,15 @@ class ProvidersConfig:
     # strategy exists specifically to avoid.
     resource_spool_path: str | None = None
 
+    # How many spool writes accumulate before ResourceSpool commits to
+    # disk - same batching, same rationale, and same measured motivation as
+    # checkpoint_commit_every above (commit-per-write collapsed to
+    # single-digit writes/sec at realistic file sizes). Safe to batch
+    # because the spool is flushed before any checkpoint marker referring
+    # to its contents is written (see resource_spool.py's durability rule):
+    # a crash between commits only re-fetches work, never loses it.
+    resource_spool_commit_every: int = 100
+
     # National discovery partitions its unscoped PractitionerRole walk into
     # `_lastUpdated` windows, each `cigna_fhir_window_days` wide, covering
     # the last `cigna_fhir_lookback_days`. Both bounds are documented

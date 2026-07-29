@@ -234,6 +234,12 @@ providers:
   # rather than silently using the unbounded cache this strategy avoids.
   resource_spool_path: null
 
+  # How many spool writes accumulate before committing to disk - same
+  # batching and same measured motivation as checkpoint_commit_every.
+  # Safe because the spool is always flushed before any checkpoint marker
+  # that refers to its contents (see providermap/resource_spool.py).
+  resource_spool_commit_every: 100
+
   # National discovery partitions its walk into _lastUpdated windows, each
   # this many days wide, covering the last cigna_fhir_lookback_days. Both
   # are documented defaults, not measured ones - a later calibration probe

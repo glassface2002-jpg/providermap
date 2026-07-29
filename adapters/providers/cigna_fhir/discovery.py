@@ -553,6 +553,31 @@ def _generate_lastupdated_windows(
     return windows
 
 
+def _spool_entries(spool: ResourceSpool, entries: list[dict[str, Any]], stats: DiscoveryStats) -> None:
+    """Write one batch/window's fetched resources into the spool, computing
+    the ``practitioner_ref`` index column and duplicate stats along the way.
+
+    Module-level (not a closure) because it is the ONE spool write path,
+    shared by :class:`NationalDiscovery`'s window handler and the
+    spool-backed state-scoped batch path - the practitioner_ref extraction
+    and duplicate accounting must never drift between the two. Uses
+    ``exists()`` rather than ``get()`` for the duplicate check: this runs
+    once per fetched resource (~80k+ per state), and deserializing a full
+    FHIR body just to discard it is pure read amplification."""
+    for resource in entries:
+        resource_type = resource.get("resourceType")
+        resource_id = resource.get("id")
+        if not resource_type or not resource_id:
+            log.warning("Skipping malformed spooled entry with no type/id: %r", resource)
+            continue
+        stats.record_resource(resource_type, is_duplicate=spool.exists(resource_type, resource_id))
+        practitioner_ref: str | None = None
+        if resource_type == "PractitionerRole":
+            parsed = _parse_reference(resource.get("practitioner"))
+            practitioner_ref = parsed[1] if parsed else None
+        spool.upsert(resource_type, resource_id, resource, practitioner_ref=practitioner_ref)
+
+
 class NationalDiscovery(DiscoveryStrategy):
     """Unscoped national ``PractitionerRole`` traversal - see
     ``NATIONAL_DISCOVERY_DESIGN.md``'s national sequence diagram. Two
@@ -596,6 +621,14 @@ class NationalDiscovery(DiscoveryStrategy):
         checkpoint_id = f"{context.adapter_name}:national"
         if cp is not None and cp.start_or_resume(checkpoint_id):
             log.info("Resuming checkpoint %s", checkpoint_id)
+        else:
+            # FRESH start: the spool file may hold rows from a previous
+            # run, mode, or scope (it persists across runs by design so
+            # RESUMES can reuse it). Left in place, stale rows would leak
+            # into this run's materialize pass - resurrecting resources the
+            # server has since deleted and inflating yields/counts. Only a
+            # genuine resume may trust existing spool contents.
+            spool.clear()
         had_errors = False
 
         # --- Stage 1: spool -------------------------------------------- #
@@ -611,21 +644,6 @@ class NationalDiscovery(DiscoveryStrategy):
             url = _national_window_url(context.base_url, ge, le, context.page_size)
             pending_windows.append((window_key, url))
 
-        def _spool_entries(entries: list[dict[str, Any]]) -> None:
-            for resource in entries:
-                resource_type = resource.get("resourceType")
-                resource_id = resource.get("id")
-                if not resource_type or not resource_id:
-                    log.warning("Skipping malformed spooled entry with no type/id: %r", resource)
-                    continue
-                is_duplicate = spool.get(resource_type, resource_id) is not None
-                stats.record_resource(resource_type, is_duplicate=is_duplicate)
-                practitioner_ref: str | None = None
-                if resource_type == "PractitionerRole":
-                    parsed = _parse_reference(resource.get("practitioner"))
-                    practitioner_ref = parsed[1] if parsed else None
-                spool.upsert(resource_type, resource_id, resource, practitioner_ref=practitioner_ref)
-
         def _handle_window_result(window_key: str, result: list[dict[str, Any]] | Exception) -> None:
             nonlocal had_errors
             if isinstance(result, Exception):
@@ -640,8 +658,16 @@ class NationalDiscovery(DiscoveryStrategy):
                     result,
                 )
                 return
-            _spool_entries(result)
+            _spool_entries(spool, result, stats)
             if cp is not None:
+                # Durability ordering (see resource_spool.py's module
+                # docstring): this window's checkpoint payload is EMPTY -
+                # the spool is the only durable record of its data - so the
+                # spooled rows must reach disk before the "done" marker
+                # does. The reverse order would let a crash produce a
+                # marker whose data never landed, and resume would skip the
+                # window forever.
+                spool.flush()
                 cp.mark_done(checkpoint_id, "national_windows", window_key, {})
 
         if context.max_concurrent > 1 and pending_windows:

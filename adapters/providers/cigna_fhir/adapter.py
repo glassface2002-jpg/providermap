@@ -686,7 +686,9 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
         #: strategy). Public (no leading underscore), like
         #: ``checkpoint_store``, so callers can inspect or close it.
         self.resource_spool: ResourceSpool | None = (
-            ResourceSpool(pc.resource_spool_path) if pc.resource_spool_path else None
+            ResourceSpool(pc.resource_spool_path, commit_every=pc.resource_spool_commit_every)
+            if pc.resource_spool_path
+            else None
         )
         self._window_days = pc.cigna_fhir_window_days
         self._lookback_days = pc.cigna_fhir_lookback_days
