@@ -32,7 +32,7 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -68,8 +68,15 @@ ApplyRoleEntries = Callable[
     [list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]], list[dict[str, Any]], DiscoveryStats],
     None,
 ]
+#: Yields (batch_key, entries_or_exception) as each becomes available, in
+#: `pending`'s order - not a dict returned only once everything finishes.
+#: See CignaFhirAdapter._fetch_batches_concurrently's docstring for why:
+#: materializing a dict of ~42,000 results before consuming any of them
+#: measurably contributed to a 5.61 GB peak RSS on the smallest state
+#: tested.
 FetchBatchesConcurrently = Callable[
-    [list[tuple[str, str]], DiscoveryStats], Awaitable[dict[str, list[dict[str, Any]] | Exception]]
+    [list[tuple[str, str]], DiscoveryStats],
+    AsyncIterator[tuple[str, list[dict[str, Any]] | Exception]],
 ]
 
 
@@ -344,21 +351,33 @@ class StateScopedDiscovery(DiscoveryStrategy):
                     # `_include`d Practitioner/Organization resources only
                     # ever appear alongside a matched role, so an empty
                     # `result` here always means zero roles, never a role
-                    # with unresolved includes. Expected for the majority of
-                    # locations (measured ~94% for RI) - not a failure signal
-                    # by itself; see DiscoveryStats.suspected_silent_failure.
+                    # with unresolved includes. A nonzero count here is
+                    # expected and not a failure signal by itself - see
+                    # DiscoveryStats.role_queries_empty's docstring for why
+                    # the exact rate isn't a stable constant to assert
+                    # against (it's measured to vary significantly over
+                    # time on this live, continuously-updated third-party
+                    # dataset). See DiscoveryStats.suspected_silent_failure
+                    # for the actual failure signal.
                     stats.role_queries_empty += 1
                 context.apply_role_entries(result, resources, roles, stats)
                 if cp is not None:
                     cp.mark_done(checkpoint_id, "practitioner_role_by_location", batch_key, {"entries": result})
 
             if context.max_concurrent > 1 and pending_batches:
-                # Concurrent path: fetch all pending batches together, then
-                # apply/checkpoint results one at a time, in pending_batches'
-                # order - deterministic regardless of network arrival order.
-                batch_results = asyncio.run(context.fetch_batches_concurrently(pending_batches, stats))
-                for batch_key, _url in pending_batches:
-                    _handle_batch_result(batch_key, batch_results[batch_key])
+                # Concurrent path: apply/checkpoint each batch's result as
+                # SOON AS IT ARRIVES, in pending_batches' order (still
+                # deterministic regardless of network arrival order - see
+                # fetch_batches_concurrently's docstring), rather than
+                # waiting for every one of ~42,000 requests to finish
+                # before applying or checkpointing any of them.
+                async def _consume_batches() -> None:
+                    async for batch_key, result in context.fetch_batches_concurrently(
+                        pending_batches, stats
+                    ):
+                        _handle_batch_result(batch_key, result)
+
+                asyncio.run(_consume_batches())
             else:
                 # Sequential path (the default, max_concurrent=1) - byte-for-
                 # byte the original behavior: one batch fetched, applied, and
@@ -584,9 +603,15 @@ class NationalDiscovery(DiscoveryStrategy):
                 cp.mark_done(checkpoint_id, "national_windows", window_key, {})
 
         if context.max_concurrent > 1 and pending_windows:
-            window_results = asyncio.run(context.fetch_batches_concurrently(pending_windows, stats))
-            for window_key, _url in pending_windows:
-                _handle_window_result(window_key, window_results[window_key])
+            # Same streaming-consumption change as StateScopedDiscovery's
+            # batch phase - see fetch_batches_concurrently's docstring.
+            async def _consume_windows() -> None:
+                async for window_key, result in context.fetch_batches_concurrently(
+                    pending_windows, stats
+                ):
+                    _handle_window_result(window_key, result)
+
+            asyncio.run(_consume_windows())
         else:
             for window_key, url in pending_windows:
                 try:

@@ -544,7 +544,10 @@ def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
     # unchanged. Set providers.checkpoint_path before a run expected to take
     # hours, so it can survive an interruption without re-fetching everything.
     checkpoint_store = (
-        CheckpointStore(config.providers.checkpoint_path)
+        CheckpointStore(
+            config.providers.checkpoint_path,
+            commit_every=config.providers.checkpoint_commit_every,
+        )
         if config.providers.checkpoint_path
         else None
     )

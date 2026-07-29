@@ -195,6 +195,17 @@ providers:
   # everything already done.
   checkpoint_path: null
 
+  # How many checkpoint writes accumulate before actually committing to
+  # disk. 1 commits every single write (maximum durability, no batching). An
+  # offline benchmark against a Rhode Island-shaped workload (~42,000 writes,
+  # ~94% tiny/empty payloads) measured commit-per-write throughput collapse
+  # to single digits per second at real file sizes, vs. 100+x higher
+  # throughput batching every 100 writes on the identical workload - see
+  # adapters/providers/cigna_fhir/evidence/ for the numbers. A crash between
+  # batched commits only costs re-fetching up to this many already-done
+  # items on resume (harmless - re-fetching is idempotent), never data loss.
+  checkpoint_commit_every: 100
+
   # Bounded concurrency for the PractitionerRole batch phase only (see
   # adapters/providers/cigna_fhir/CONCURRENCY_DESIGN.md). 1 (default)
   # reproduces the original fully-sequential behavior exactly. The Location

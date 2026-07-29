@@ -22,10 +22,20 @@ later page. So ``discover()`` fully drains every page *before* grouping
 ``PractitionerRole``s by practitioner and yielding - grouping page-by-page
 would silently drop roles/locations/organizations that happen to land on a
 different page than the resource that first introduced them. Correctness is
-more important than premature optimization here; for the one-state pilot this
-scopes to, buffering every page in memory is cheap. A streaming/incremental
-version would be a reasonable follow-up if this is ever pointed at a national
-run, not before.
+more important than premature optimization here, and this part is
+irreducible: yielding a practitioner requires having seen every role that
+references them, which isn't knowable until every page has been walked.
+
+This is a different, smaller memory footprint than it might sound like,
+though - it holds only *deduplicated, normalized-shape* resources
+(``resources``/``roles`` in ``StateScopedDiscovery.run()``), not raw HTTP
+response bodies. The part of this adapter that used to buffer full raw
+fetch results before consuming any of them -
+``_fetch_batches_concurrently``'s concurrent-path result dict - measurably
+contributed a 5.61 GB peak RSS on the smallest state tested and has since
+been converted to a streaming async generator (see that method's own
+docstring); this module-level grouping accumulator was never the source of
+that measurement and remains unchanged.
 
 Field mapping (verified against a live Plan-Net response shape during the
 research phase; see the plan file for the full table):
@@ -52,7 +62,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -164,9 +174,18 @@ class DiscoveryStats:
     location_enumeration_completed_normally: bool | None = None
     #: One PractitionerRole query issued per enumerated location (see
     #: _practitioner_role_by_location_url) - how many were attempted this
-    #: run, and how many of the SUCCESSFUL ones returned zero roles. A high
-    #: empty count is expected and NOT a failure signal on its own - most
-    #: locations legitimately have no practitioner (measured ~94% for RI).
+    #: run, and how many of the SUCCESSFUL ones returned zero roles. A
+    #: nonzero empty count is expected and NOT a failure signal on its own -
+    #: many locations legitimately have no practitioner. The exact rate is
+    #: NOT a stable constant to assert against, though: an earlier RI
+    #: measurement (from the since-corrected OR-list-batching defect - see
+    #: config.staging_ri_corrected.yaml) suggested ~94% empty, while a later
+    #: live production-scale run (the post-streaming-fix release-gate
+    #: validation) measured ~36% empty on the same state - Cigna's directory
+    #: is a live, continuously-updated third-party dataset, and its
+    #: location/role attachment rate is expected to drift over time. Treat
+    #: any specific percentage cited in commit history or design docs as a
+    #: point-in-time measurement, never a correctness invariant.
     role_queries_attempted: int = 0
     role_queries_empty: int = 0
     #: Discovery-time practitioner-location associations, counted before
@@ -295,6 +314,41 @@ async def _fetch_with_retry(
                 retry_config.backoff_base_seconds * (2**attempt), retry_config.backoff_max_seconds
             )
             await asyncio.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
+
+
+def _fetch_with_retry_sync(
+    fetch: PageFetcher, url: str, retry_config: RetryConfig, stats: DiscoveryStats
+) -> dict[str, Any]:
+    """Sync counterpart to :func:`_fetch_with_retry`, same retry/backoff
+    semantics, for ``_fetch_timed`` - the Location-enumeration and
+    sequential (``max_concurrent=1``, the default) PractitionerRole fetch
+    path, neither of which runs inside an event loop.
+
+    This did not exist until a live production-scale run hit a transient
+    ``502`` during Location enumeration and crashed the entire multi-hour
+    ingestion instead of retrying - ``config.retries`` was always meant to
+    cover every fetch path, but only the concurrent path actually used it.
+    Applying the identical, already-configured retry policy here is a gap
+    fix, not a new policy.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(retry_config.max_attempts):
+        try:
+            return fetch(url)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in retry_config.retry_on_status:
+                raise
+            last_exc = exc
+        except httpx.TransportError as exc:
+            last_exc = exc
+        if attempt < retry_config.max_attempts - 1:
+            stats.retry_count += 1
+            delay = min(
+                retry_config.backoff_base_seconds * (2**attempt), retry_config.backoff_max_seconds
+            )
+            time.sleep(delay)
     assert last_exc is not None
     raise last_exc
 
@@ -565,7 +619,7 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
 
     def _fetch_timed(self, url: str, endpoint: str, stats: DiscoveryStats, is_continuation: bool) -> dict[str, Any]:
         started = time.monotonic()
-        bundle = self._page_fetcher(url)
+        bundle = _fetch_with_retry_sync(self._page_fetcher, url, self._retry_config, stats)
         stats.record_bundle_health(bundle, endpoint)
         stats.record_request(endpoint, time.monotonic() - started, is_continuation)
         return bundle
@@ -689,19 +743,32 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
         pending: list[tuple[str, str]],
         stats: DiscoveryStats,
         client: httpx.AsyncClient | None = None,
-    ) -> dict[str, list[dict[str, Any]] | Exception]:
+    ) -> AsyncIterator[tuple[str, list[dict[str, Any]] | Exception]]:
         """Fetch multiple independent PractitionerRole batch URLs
         concurrently, bounded by ``cigna_fhir_max_concurrent_requests`` and
         throttled by ``cigna_fhir_requests_per_second``.
 
-        Returns ``{batch_key: entries_or_exception}`` - the caller applies
-        successes and records failures exactly as the sequential path does.
-        Concurrency changes only how fetching overlaps in time; every
-        post-fetch step (applying entries, checkpointing, grouping) still
-        happens back in the plain sync ``discover()`` body, one batch's
-        result at a time, in ``pending``'s order - deterministic regardless
-        of which request actually completed first over the network (see the
-        design doc's "deterministic output" section).
+        Yields ``(batch_key, entries_or_exception)`` one at a time, in
+        ``pending``'s order - the caller applies and checkpoints each
+        result as it arrives (see ``StateScopedDiscovery.run()``'s
+        streaming apply loop) instead of waiting for every request to
+        finish first. Ordering is still deterministic regardless of which
+        request actually completed first over the network (see the design
+        doc's "deterministic output" section): every task is scheduled
+        immediately via ``asyncio.ensure_future`` so all of them progress
+        concurrently in the background (bounded by the semaphore below),
+        but this method ``await``s them back in ``pending``'s own order,
+        not completion order - awaiting an already-finished task simply
+        returns its cached result immediately.
+
+        Previously returned a fully-materialized ``dict`` only after every
+        request finished, which held all ~42,000 results in memory at once
+        on a real state-scale run (measured contributing to a 5.61 GB peak
+        RSS on the smallest state tested) before any of them were applied
+        or checkpointed. This version holds at most ``max_concurrent``
+        completed-but-not-yet-consumed results at a time, since every task
+        beyond that is still blocked on the semaphore and hasn't fetched
+        anything yet.
 
         ``client`` is an injectable seam for tests (an ``httpx.AsyncClient``
         built on ``httpx.MockTransport``, no real network) - production code
@@ -709,28 +776,27 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
         """
         semaphore = asyncio.Semaphore(self._max_concurrent)
         limiter = _RateLimiter(self._requests_per_second)
-        results: dict[str, list[dict[str, Any]] | Exception] = {}
 
-        async def run_with(active_client: httpx.AsyncClient) -> None:
-            async def fetch_one(batch_key: str, url: str) -> None:
-                async with semaphore:
-                    await limiter.acquire()
-                    try:
-                        results[batch_key] = await self._fetch_role_page_entries_async(
-                            active_client, url, stats
-                        )
-                    except Exception as exc:  # noqa: BLE001 - any failure is a per-batch result
-                        results[batch_key] = exc
+        async def fetch_one(active_client: httpx.AsyncClient, url: str) -> list[dict[str, Any]] | Exception:
+            async with semaphore:
+                await limiter.acquire()
+                try:
+                    return await self._fetch_role_page_entries_async(active_client, url, stats)
+                except Exception as exc:  # noqa: BLE001 - any failure is a per-batch result
+                    return exc
 
-            await asyncio.gather(*(fetch_one(key, url) for key, url in pending))
+        async def run_with(active_client: httpx.AsyncClient) -> AsyncIterator[tuple[str, list[dict[str, Any]] | Exception]]:
+            tasks = [asyncio.ensure_future(fetch_one(active_client, url)) for _key, url in pending]
+            for (batch_key, _url), task in zip(pending, tasks, strict=True):
+                yield batch_key, await task
 
         if client is not None:
-            await run_with(client)
+            async for item in run_with(client):
+                yield item
         else:
             async with httpx.AsyncClient() as owned_client:
-                await run_with(owned_client)
-
-        return results
+                async for item in run_with(owned_client):
+                    yield item
 
     def _apply_role_entries(
         self,
@@ -844,12 +910,19 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
             lines = address.get("line", []) or []
             telecoms = loc.get("telecom", []) or []
             phone = next((t.get("value") for t in telecoms if t.get("system") == "phone"), None)
+            addr_str = ", ".join(lines) if lines else None
+            city = address.get("city")
+            state = address.get("state")
+            zip_code = address.get("postalCode")
+            name = loc.get("name")
+            if _location_name_is_generated_address(name, lines, city, state, zip_code):
+                name = None
             locations_out[loc_id] = {
-                "name": loc.get("name"),
-                "address": ", ".join(lines) if lines else None,
-                "city": address.get("city"),
-                "state": address.get("state"),
-                "zip": address.get("postalCode"),
+                "name": name,
+                "address": addr_str,
+                "city": city,
+                "state": state,
+                "zip": zip_code,
                 "phone": phone,
             }
 
@@ -914,6 +987,14 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
             primary_org_name = organizations[primary_role["organization_id"]]["name"]
 
         npi = extracted["npi"]
+        # Same value that answers "where does this practitioner primarily
+        # practice" for practice_name (adapter.py:970-973's primary-role
+        # selection) - populated for both columns so exports (see
+        # exporter.py's "Primary Site of Care" column) don't come up blank
+        # for Cigna-sourced providers the way they used to.
+        primary_site_name = (
+            locations.get(primary_location_id, {}).get("name") if primary_location_id else None
+        ) or primary_org_name
         provider = Provider(
             full_name=extracted["full_name"],
             first_name=extracted["first_name"],
@@ -922,10 +1003,8 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
             specialty=primary_role.get("specialty"),
             taxonomy_code=primary_role.get("taxonomy_code"),
             taxonomy_desc=primary_role.get("taxonomy_desc"),
-            practice_name=(
-                locations.get(primary_location_id, {}).get("name") if primary_location_id else None
-            )
-            or primary_org_name,
+            practice_name=primary_site_name,
+            primary_site_of_care=primary_site_name,
             npi=npi,
             npi_valid=npi_checksum_valid(npi) if npi else True,
             location_count=len(locations) or 1,
@@ -988,6 +1067,40 @@ def _any_or_none(values: list[bool | None]) -> bool | None:
     if any(v is False for v in values):
         return False
     return None
+
+
+def _location_name_is_generated_address(
+    name: str | None,
+    address_lines: list[str] | None,
+    city: str | None,
+    state: str | None,
+    zip_code: str | None,
+) -> bool:
+    """True if a FHIR ``Location.name`` is really just that same Location's
+    own address components auto-joined by dashes - EVERY line, not just the
+    first (observed live: a two-line address like ``"70 KENYON AVE UNIT
+    326"`` + ``"# 326"`` produces a name of ``"70 KENYON AVE UNIT 326-#
+    326-WAKEFIELD-RI-02879"``) - rather than an actual facility name.
+    ``address_lines`` must be the raw per-line list (``Location.address
+    .line``), not a comma-joined display string - joining with ``", "``
+    first (as the display ``address`` field does) doesn't match Cigna's own
+    dash-joined generated name whenever a location has more than one
+    address line, which is common (suite/unit/building lines) and was
+    exactly the gap that let the majority of these slip past an earlier,
+    narrower version of this check that only compared against a single
+    joined address string. Treating a match as a name duplicates the
+    address already stored separately in ``Provider.address``/``city``/
+    ``state``/``zip`` and ``Location.address``/``city``/``state``/``zip`` -
+    callers filter it out here so ``practice_name``/``primary_site_of_care``
+    (``normalize()``) and ``Location.facility_name``
+    (``_location_from_dict``) fall back to the organization name or stay
+    blank instead of repeating the address a third time.
+    """
+    if not name or not address_lines:
+        return False
+    zip5 = (zip_code or "")[:5]
+    candidate = "-".join(p for p in [*address_lines, city, state, zip5] if p)
+    return name.strip().casefold() == candidate.strip().casefold()
 
 
 def _location_from_dict(loc: dict[str, Any], address_key: str) -> Location:

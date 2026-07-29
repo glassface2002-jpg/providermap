@@ -3,11 +3,31 @@ tied to any one adapter."""
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from providermap.checkpoint import CheckpointStore
+
+
+def _committed_status(path: Path, checkpoint_id: str, phase: str, key: str) -> str | None:
+    """Read a status via a brand-new raw connection - i.e. only what's
+    actually committed to disk, never a batched-but-uncommitted write still
+    sitting in some other CheckpointStore's pending transaction. A read-only
+    SELECT only ever needs a SHARED lock, so this never blocks on another
+    connection's uncommitted RESERVED-lock write, unlike opening a second
+    CheckpointStore would (its own schema-init commit could contend for the
+    write lock)."""
+    conn = sqlite3.connect(path, timeout=30)
+    try:
+        row = conn.execute(
+            "SELECT status FROM checkpoint_items WHERE checkpoint_id=? AND phase=? AND key=?",
+            (checkpoint_id, phase, key),
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
 
 
 @pytest.fixture()
@@ -133,3 +153,74 @@ class TestDurability:
         assert store2.start_or_resume("run-1") is True
         assert store2.get_payload("run-1", "phase", "1") == {"v": 42}
         store2.close()
+
+
+class TestCommitBatching:
+    """commit_every controls how often mark_done/mark_error actually fsync -
+    see CheckpointStore's docstring for the measured throughput motivation.
+    Durability is checked via _committed_status, a raw read-only connection,
+    since a batched-but-uncommitted write is still visible to the SAME
+    connection's own reads (SQLite sees its own pending transaction) - only
+    an independent connection can tell whether it actually reached disk."""
+
+    def test_invalid_commit_every_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError):
+            CheckpointStore(tmp_path / "checkpoints.db", commit_every=0)
+
+    def test_default_commit_every_one_is_durable_after_every_write(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "checkpoints.db"
+        store = CheckpointStore(path)  # default commit_every=1
+        store.mark_done("run-1", "phase", "1", {"v": 1})
+
+        assert _committed_status(path, "run-1", "phase", "1") == "done"
+        store.close()
+
+    def test_batched_writes_are_not_durable_until_the_threshold(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "checkpoints.db"
+        store = CheckpointStore(path, commit_every=3)
+        store.mark_done("run-1", "phase", "1", {"v": 1})
+        store.mark_done("run-1", "phase", "2", {"v": 2})
+
+        assert _committed_status(path, "run-1", "phase", "1") is None  # not yet committed
+
+        store.mark_done("run-1", "phase", "3", {"v": 3})  # 3rd write triggers commit
+
+        assert _committed_status(path, "run-1", "phase", "1") == "done"
+        assert _committed_status(path, "run-1", "phase", "3") == "done"
+        store.close()
+
+    def test_close_flushes_pending_batched_writes(self, tmp_path: Path) -> None:
+        path = tmp_path / "checkpoints.db"
+        store = CheckpointStore(path, commit_every=100)
+        store.mark_done("run-1", "phase", "1", {"v": 1})  # far short of 100
+        store.close()
+
+        assert _committed_status(path, "run-1", "phase", "1") == "done"
+
+    def test_flush_commits_without_closing(self, tmp_path: Path) -> None:
+        path = tmp_path / "checkpoints.db"
+        store = CheckpointStore(path, commit_every=100)
+        store.mark_done("run-1", "phase", "1", {"v": 1})
+
+        assert _committed_status(path, "run-1", "phase", "1") is None
+
+        store.flush()
+
+        assert _committed_status(path, "run-1", "phase", "1") == "done"
+        store.close()
+
+    def test_mark_complete_flushes_pending_batched_writes(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "checkpoints.db"
+        store = CheckpointStore(path, commit_every=100)
+        store.start_or_resume("run-1")
+        store.mark_done("run-1", "phase", "1", {"v": 1})  # far short of 100
+        store.mark_complete("run-1")
+
+        assert _committed_status(path, "run-1", "phase", "1") == "done"
+        store.close()

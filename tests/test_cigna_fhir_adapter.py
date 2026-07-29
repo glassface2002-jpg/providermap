@@ -9,6 +9,7 @@ Every NPI referenced here (``JANE_DOE_NPI``, ``ORG_1_NPI``,
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import httpx
 import pytest
@@ -17,6 +18,7 @@ import adapters.providers.cigna_fhir.adapter as cigna_adapter_module
 from adapters.providers.base_dataset import NormalizedProvider
 from adapters.providers.cigna_fhir.adapter import (
     CignaFhirAdapter,
+    _location_name_is_generated_address,
     _location_search_url,
     _practitioner_role_by_location_url,
     _unscoped_search_url,
@@ -259,6 +261,12 @@ class TestDiscoverStateScoped:
         assert normalized.provider.npi == STATE_SCOPED_PRACTITIONER_NPI
         assert normalized.provider.state == "RI"
         assert normalized.provider.city == "Providence"
+        # primary_site_of_care mirrors practice_name (same primary-location/
+        # organization selection) - the exporter's "Primary Site of Care"
+        # column was silently blank for every Cigna-sourced provider before
+        # this was wired up; both must carry the identical, non-null value.
+        assert normalized.provider.practice_name is not None
+        assert normalized.provider.primary_site_of_care == normalized.provider.practice_name
 
 
 class TestDiscoveryStats:
@@ -1215,6 +1223,24 @@ def _mock_async_client(
     return client, state
 
 
+async def _drain_concurrent(
+    adapter: CignaFhirAdapter,
+    pending: list[tuple[str, str]],
+    stats: Any,
+    client: httpx.AsyncClient,
+) -> dict:
+    """_fetch_batches_concurrently is an async generator (streams results in
+    pending's order instead of materializing a dict of everything up front -
+    see its docstring); tests that only care about the final per-key
+    results can drain it into a dict same as before."""
+    results = {}
+    async for batch_key, result in adapter._fetch_batches_concurrently(
+        pending, stats, client=client
+    ):
+        results[batch_key] = result
+    return results
+
+
 class TestConcurrency:
     """Bounded concurrency for the PractitionerRole batch phase only - see
     adapters/providers/cigna_fhir/CONCURRENCY_DESIGN.md. cigna_fhir_max_concurrent_requests
@@ -1236,8 +1262,8 @@ class TestConcurrency:
 
         stats = DiscoveryStats()
         results = asyncio.run(
-            adapter._fetch_batches_concurrently(
-                [("0", role_url_a), ("1", role_url_b)], stats, client=client
+            _drain_concurrent(
+                adapter, [("0", role_url_a), ("1", role_url_b)], stats, client
             )
         )
         asyncio.run(client.aclose())
@@ -1287,7 +1313,7 @@ class TestConcurrency:
         adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}))
         stats = DiscoveryStats()
         results = asyncio.run(
-            adapter._fetch_batches_concurrently([("0", role_url_a)], stats, client=client)
+            _drain_concurrent(adapter, [("0", role_url_a)], stats, client)
         )
         asyncio.run(client.aclose())
 
@@ -1306,7 +1332,7 @@ class TestConcurrency:
         adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}))
         stats = DiscoveryStats()
         results = asyncio.run(
-            adapter._fetch_batches_concurrently([("0", role_url_a)], stats, client=client)
+            _drain_concurrent(adapter, [("0", role_url_a)], stats, client)
         )
         asyncio.run(client.aclose())
 
@@ -1340,3 +1366,214 @@ class TestConcurrency:
         stats = adapter.last_discovery_stats
         assert len(stats.failed_batches) == 1
         assert stats.failed_batches[0][0] == "1"
+
+
+class TestSyncFetchRetry:
+    """_fetch_timed - the Location-enumeration and sequential
+    (max_concurrent=1, the default) PractitionerRole fetch path - retries
+    via the same RetryConfig the concurrent path already used. This gap
+    (the sync path had no retry logic at all) was only found live: a
+    production-scale run hit a transient 502 during Location enumeration
+    and the whole multi-hour ingestion crashed instead of retrying. See
+    _fetch_with_retry_sync's docstring."""
+
+    def test_location_enumeration_retries_transient_status_then_succeeds(
+        self, config: Config
+    ) -> None:
+        config.providers.cigna_fhir_state = "RI"
+        config.retries.backoff_base_seconds = 0.001
+        config.retries.backoff_max_seconds = 0.01
+        location_url = _location_search_url(
+            config.providers.cigna_fhir_base_url,
+            config.providers.cigna_fhir_state,
+            config.providers.cigna_fhir_page_size,
+        )
+        calls = {"n": 0}
+
+        def flaky_fetcher(url: str) -> dict:
+            if url == location_url:
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    request = httpx.Request("GET", url)
+                    httpx.Response(502, request=request, json={}).raise_for_status()
+                return STATE_LOCATION_BUNDLE
+            return {}
+
+        adapter = CignaFhirAdapter(config, page_fetcher=flaky_fetcher)
+        list(adapter.discover())  # must not raise - the 502 is retried, not fatal
+
+        assert calls["n"] == 2  # one failure, one retry
+        assert adapter.last_discovery_stats.retry_count == 1
+
+    def test_location_enumeration_does_not_retry_non_retryable_status(
+        self, config: Config
+    ) -> None:
+        config.providers.cigna_fhir_state = "RI"
+        calls = {"n": 0}
+
+        def always_fails(url: str) -> dict:
+            calls["n"] += 1
+            request = httpx.Request("GET", url)
+            httpx.Response(400, request=request, json={}).raise_for_status()
+            return {}  # unreachable
+
+        adapter = CignaFhirAdapter(config, page_fetcher=always_fails)
+        with pytest.raises(httpx.HTTPStatusError):
+            list(adapter.discover())
+
+        assert calls["n"] == 1  # never retried - 400 is not in retry_on_status
+
+
+class TestLocationNameIsGeneratedAddress:
+    """Cigna's Location.name is sometimes just that Location's own address
+    lines auto-joined by dashes (observed live: single-line
+    "45 WELLS ST # 104-WESTERLY-RI-02891", and - the case a narrower,
+    single-line-only version of this check missed - multi-line
+    "70 KENYON AVE UNIT 326-# 326-WAKEFIELD-RI-02879") rather than a real
+    facility name - see _location_name_is_generated_address's docstring."""
+
+    def test_exact_generated_address_match(self) -> None:
+        assert _location_name_is_generated_address(
+            "45 WELLS ST # 104-WESTERLY-RI-02891",
+            ["45 WELLS ST # 104"],
+            "WESTERLY",
+            "RI",
+            "02891-2927",  # zip+4 - only the 5-digit prefix should be compared
+        )
+
+    def test_multi_line_address_match(self) -> None:
+        # Real example that slipped past an earlier version of this check,
+        # which compared against ", "-joined lines instead of "-"-joined
+        # individual lines - a second address line (unit/suite/building)
+        # broke the exact match.
+        assert _location_name_is_generated_address(
+            "70 KENYON AVE UNIT 326-# 326-WAKEFIELD-RI-02879",
+            ["70 KENYON AVE UNIT 326", "# 326"],
+            "WAKEFIELD",
+            "RI",
+            "02879-4253",
+        )
+
+    def test_case_insensitive_match(self) -> None:
+        assert _location_name_is_generated_address(
+            "45 wells st # 104-westerly-ri-02891",
+            ["45 WELLS ST # 104"],
+            "WESTERLY",
+            "RI",
+            "02891",
+        )
+
+    def test_real_facility_name_is_not_flagged(self) -> None:
+        assert not _location_name_is_generated_address(
+            "Westerly Family Medicine",
+            ["45 WELLS ST # 104"],
+            "WESTERLY",
+            "RI",
+            "02891-2927",
+        )
+
+    def test_no_name_is_not_flagged(self) -> None:
+        assert not _location_name_is_generated_address(
+            None, ["45 WELLS ST # 104"], "WESTERLY", "RI", "02891"
+        )
+
+    def test_no_address_is_not_flagged(self) -> None:
+        # Nothing to compare against - can't confirm it's a generated
+        # address, so leave whatever name is present alone.
+        assert not _location_name_is_generated_address(
+            "45 WELLS ST # 104-WESTERLY-RI-02891", None, "WESTERLY", "RI", "02891"
+        )
+
+
+class TestPracticeNameAddressFiltering:
+    """extract()/normalize() end-to-end: a Location whose name is really
+    just its own address must not flow into practice_name or
+    primary_site_of_care - see _location_name_is_generated_address."""
+
+    def _raw_record(self, location_name: str) -> dict[str, Any]:
+        return {
+            "practitioner": {
+                "resourceType": "Practitioner",
+                "id": "pract-1",
+                "identifier": [
+                    {"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}
+                ],
+                "name": [{"family": "Doe", "given": ["Jane"]}],
+            },
+            "roles": [
+                {
+                    "resourceType": "PractitionerRole",
+                    "id": "role-1",
+                    "practitioner": {"reference": "Practitioner/pract-1"},
+                    "location": [{"reference": "Location/loc-1"}],
+                    "organization": {"reference": "Organization/org-1"},
+                    "specialty": [],
+                }
+            ],
+            "locations": {
+                "loc-1": {
+                    "resourceType": "Location",
+                    "id": "loc-1",
+                    "name": location_name,
+                    "address": {
+                        "line": ["45 WELLS ST # 104"],
+                        "city": "WESTERLY",
+                        "state": "RI",
+                        "postalCode": "02891-2927",
+                    },
+                }
+            },
+            "organizations": {
+                "org-1": {
+                    "resourceType": "Organization",
+                    "id": "org-1",
+                    "name": "Westerly Family Medicine",
+                }
+            },
+        }
+
+    def test_generated_address_name_falls_back_to_organization_name(
+        self, config: Config
+    ) -> None:
+        adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}))
+        raw = self._raw_record("45 WELLS ST # 104-WESTERLY-RI-02891")
+
+        extracted = adapter.extract(raw)
+        assert extracted["locations"]["loc-1"]["name"] is None
+
+        normalized = adapter.normalize(extracted)
+        assert normalized.provider.practice_name == "Westerly Family Medicine"
+        assert normalized.provider.primary_site_of_care == "Westerly Family Medicine"
+
+    def test_multi_line_generated_address_name_falls_back_to_organization_name(
+        self, config: Config
+    ) -> None:
+        # Real example that slipped past an earlier, single-line-only
+        # version of this filter - a second address line (unit number)
+        # broke the exact-match comparison.
+        adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}))
+        raw = self._raw_record("70 KENYON AVE UNIT 326-# 326-WAKEFIELD-RI-02879")
+        raw["locations"]["loc-1"]["address"] = {
+            "line": ["70 KENYON AVE UNIT 326", "# 326"],
+            "city": "WAKEFIELD",
+            "state": "RI",
+            "postalCode": "02879-4253",
+        }
+
+        extracted = adapter.extract(raw)
+        assert extracted["locations"]["loc-1"]["name"] is None
+
+        normalized = adapter.normalize(extracted)
+        assert normalized.provider.practice_name == "Westerly Family Medicine"
+        assert normalized.provider.primary_site_of_care == "Westerly Family Medicine"
+
+    def test_real_facility_name_is_preserved(self, config: Config) -> None:
+        adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}))
+        raw = self._raw_record("Westerly Family Medicine Clinic")
+
+        extracted = adapter.extract(raw)
+        assert extracted["locations"]["loc-1"]["name"] == "Westerly Family Medicine Clinic"
+
+        normalized = adapter.normalize(extracted)
+        assert normalized.provider.practice_name == "Westerly Family Medicine Clinic"
+        assert normalized.provider.primary_site_of_care == "Westerly Family Medicine Clinic"

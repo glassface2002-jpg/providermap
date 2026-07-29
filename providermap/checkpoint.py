@@ -81,15 +81,54 @@ class CheckpointStore:
     and different for "a different logical run", typically derived from the
     adapter name plus whatever scopes it (see
     ``CignaFhirAdapter``'s ``f"{self.name}:{self._state or 'unscoped'}"``).
+
+    ``commit_every`` controls how often :meth:`mark_done`/:meth:`mark_error`
+    actually fsync to disk. The default, ``1``, commits every single call -
+    the original behavior, and what every test in this module assumes unless
+    it says otherwise. A real ingestion run (see
+    ``adapters/providers/cigna_fhir/``) measured this costing an order of
+    magnitude in throughput at scale (offline benchmark: ~9 writes/sec at
+    commit-per-write vs. ~900+ writes/sec batched every 100, on the same
+    realistic payload mix) - full per-write fsync durability turned out to
+    buy very little in practice, since a crash between batched commits only
+    means the next resume re-fetches up to ``commit_every`` already-done
+    items (each fetch is idempotent - re-marking an already-done item done
+    is harmless), never any actual data loss or corruption. Every explicit
+    lifecycle boundary (:meth:`mark_complete`, :meth:`clear`,
+    :meth:`clear_phase`, :meth:`close`) still commits unconditionally
+    regardless of ``commit_every``, so nothing pending is ever silently
+    dropped at those points.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, commit_every: int = 1) -> None:
+        if commit_every < 1:
+            raise ValueError(f"commit_every must be >= 1, got {commit_every}")
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, timeout=30)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
         self.conn.commit()
+        self._commit_every = commit_every
+        self._writes_since_commit = 0
+
+    def _write_committed(self) -> None:
+        """Call after every ``mark_done``/``mark_error`` write - commits
+        immediately if ``commit_every`` is ``1`` (the default), or once
+        every ``commit_every`` calls otherwise."""
+        self._writes_since_commit += 1
+        if self._writes_since_commit >= self._commit_every:
+            self.conn.commit()
+            self._writes_since_commit = 0
+
+    def flush(self) -> None:
+        """Commit any writes batched by ``commit_every`` that haven't been
+        flushed yet. A no-op if there's nothing pending. Called
+        automatically by :meth:`close`; call it directly if a caller needs a
+        durability checkpoint mid-run without closing the store."""
+        if self._writes_since_commit:
+            self.conn.commit()
+            self._writes_since_commit = 0
 
     # ------------------------------------------------------------------ #
     # run lifecycle
@@ -134,7 +173,12 @@ class CheckpointStore:
             "UPDATE checkpoint_runs SET completed_at=? WHERE checkpoint_id=?",
             (_now(), checkpoint_id),
         )
+        # Unconditional commit - flushes this update AND any writes batched
+        # by commit_every that hadn't been committed yet, since both share
+        # the same connection's pending transaction. A completed run must
+        # never be left partially durable.
         self.conn.commit()
+        self._writes_since_commit = 0
 
     def clear(self, checkpoint_id: str) -> None:
         """Discard all state for this ``checkpoint_id`` - forces the next
@@ -146,6 +190,7 @@ class CheckpointStore:
             "DELETE FROM checkpoint_runs WHERE checkpoint_id=?", (checkpoint_id,)
         )
         self.conn.commit()
+        self._writes_since_commit = 0
 
     def clear_phase(self, checkpoint_id: str, phase: str) -> None:
         """Discard all work-item state for one phase only, leaving every
@@ -162,6 +207,7 @@ class CheckpointStore:
             (checkpoint_id, phase),
         )
         self.conn.commit()
+        self._writes_since_commit = 0
 
     # ------------------------------------------------------------------ #
     # work items
@@ -201,7 +247,7 @@ class CheckpointStore:
             "VALUES (?, ?, ?, 'done', ?, NULL, ?)",
             (checkpoint_id, phase, key, json.dumps(payload), _now()),
         )
-        self.conn.commit()
+        self._write_committed()
 
     def mark_error(self, checkpoint_id: str, phase: str, key: str, error: str) -> None:
         self.conn.execute(
@@ -210,7 +256,7 @@ class CheckpointStore:
             "VALUES (?, ?, ?, 'error', NULL, ?, ?)",
             (checkpoint_id, phase, key, error, _now()),
         )
-        self.conn.commit()
+        self._write_committed()
 
     def progress(self, checkpoint_id: str, phase: str) -> PhaseProgress:
         rows = self.conn.execute(
@@ -222,4 +268,5 @@ class CheckpointStore:
         return PhaseProgress(done=counts.get("done", 0), error=counts.get("error", 0))
 
     def close(self) -> None:
+        self.flush()
         self.conn.close()
