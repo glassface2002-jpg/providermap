@@ -70,7 +70,12 @@ ApplyLocationEntries = Callable[
     [list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]], list[str], DiscoveryStats], None
 ]
 ApplyRoleEntries = Callable[
-    [list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]], list[dict[str, Any]], DiscoveryStats],
+    [
+        list[dict[str, Any]],
+        dict[tuple[str, str], dict[str, Any]],
+        list[dict[str, Any]],
+        DiscoveryStats,
+    ],
     None,
 ]
 #: Yields (batch_key, entries_or_exception) as each becomes available, in
@@ -198,6 +203,8 @@ class StateScopedDiscovery(DiscoveryStrategy):
         failure and propagates - failing the run loudly rather than
         recording an undercounted enumeration as complete.
         """
+        if context.state is None:
+            raise ValueError("state-scoped discovery requires context.state")
         resume_url = _location_search_url(context.base_url, context.state, context.page_size)
         reloaded_entries: list[dict[str, Any]] = []
         next_page_index = 0
@@ -275,7 +282,9 @@ class StateScopedDiscovery(DiscoveryStrategy):
             )
             return
 
-        context.apply_location_entries(reloaded_entries + new_entries, resources, location_ids, stats)
+        context.apply_location_entries(
+            reloaded_entries + new_entries, resources, location_ids, stats
+        )
 
     def _run_location_enumeration_spool(
         self,
@@ -296,6 +305,8 @@ class StateScopedDiscovery(DiscoveryStrategy):
         legacy method - see its docstring for the underlying cursor-TTL
         rationale; only the payload shape differs.
         """
+        if context.state is None:
+            raise ValueError("state-scoped discovery requires context.state")
         resume_url = _location_search_url(context.base_url, context.state, context.page_size)
         reloaded_ids: list[str] = []
         next_page_index = 0
@@ -416,7 +427,10 @@ class StateScopedDiscovery(DiscoveryStrategy):
 
         if context.state:
             location_ids: list[str] = []
-            if cp is not None and cp.status(checkpoint_id, "location_enumeration_spool", "all") == "done":
+            if (
+                cp is not None
+                and cp.status(checkpoint_id, "location_enumeration_spool", "all") == "done"
+            ):
                 payload = cp.get_payload(checkpoint_id, "location_enumeration_spool", "all")
                 assert payload is not None
                 location_ids = payload["location_ids"]
@@ -445,9 +459,10 @@ class StateScopedDiscovery(DiscoveryStrategy):
                 # already durably holds a done batch's data, so - unlike
                 # the legacy phase, which replays stored entries through
                 # apply_role_entries - resuming needs no replay at all.
-                if cp is not None and cp.status(
-                    checkpoint_id, "role_by_location_spool", location_id
-                ) == "done":
+                if (
+                    cp is not None
+                    and cp.status(checkpoint_id, "role_by_location_spool", location_id) == "done"
+                ):
                     continue
                 url = _practitioner_role_by_location_url(
                     context.base_url, location_id, context.page_size
@@ -463,7 +478,9 @@ class StateScopedDiscovery(DiscoveryStrategy):
                     had_errors = True
                     stats.failed_batches.append((batch_key, repr(result)))
                     if cp is not None:
-                        cp.mark_error(checkpoint_id, "role_by_location_spool", batch_key, repr(result))
+                        cp.mark_error(
+                            checkpoint_id, "role_by_location_spool", batch_key, repr(result)
+                        )
                     log.error(
                         "PractitionerRole batch %s failed - continuing with remaining "
                         "batches (this location's practitioners will be missing this "
@@ -482,6 +499,7 @@ class StateScopedDiscovery(DiscoveryStrategy):
                     cp.mark_done(checkpoint_id, "role_by_location_spool", batch_key, {})
 
             if context.max_concurrent > 1 and pending_batches:
+
                 async def _consume_batches() -> None:
                     async for batch_key, result in context.fetch_batches_concurrently(
                         pending_batches, stats
@@ -499,7 +517,10 @@ class StateScopedDiscovery(DiscoveryStrategy):
                         entries = exc
                     _handle_batch_result(batch_key, entries)
         else:
-            if cp is not None and cp.status(checkpoint_id, "practitioner_role_pages_spool", "all") == "done":
+            if (
+                cp is not None
+                and cp.status(checkpoint_id, "practitioner_role_pages_spool", "all") == "done"
+            ):
                 pass  # already spooled by a prior run of this same scope
             else:
                 start_url = _unscoped_search_url(context.base_url, context.page_size)
@@ -581,7 +602,9 @@ class StateScopedDiscovery(DiscoveryStrategy):
                     len(location_ids),
                 )
             else:
-                self._run_location_enumeration(context, stats, cp, checkpoint_id, resources, location_ids)
+                self._run_location_enumeration(
+                    context, stats, cp, checkpoint_id, resources, location_ids
+                )
                 if cp is not None:
                     final_entries = [resources[("Location", lid)] for lid in location_ids]
                     cp.mark_done(
@@ -614,12 +637,20 @@ class StateScopedDiscovery(DiscoveryStrategy):
             pending_batches: list[tuple[str, str]] = []
             for location_index, location_id in enumerate(location_ids):
                 batch_key = str(location_index)
-                if cp is not None and cp.status(checkpoint_id, "practitioner_role_by_location", batch_key) == "done":
-                    payload = cp.get_payload(checkpoint_id, "practitioner_role_by_location", batch_key)
+                if (
+                    cp is not None
+                    and cp.status(checkpoint_id, "practitioner_role_by_location", batch_key)
+                    == "done"
+                ):
+                    payload = cp.get_payload(
+                        checkpoint_id, "practitioner_role_by_location", batch_key
+                    )
                     assert payload is not None
                     context.apply_role_entries(payload["entries"], resources, roles, stats)
                     continue
-                url = _practitioner_role_by_location_url(context.base_url, location_id, context.page_size)
+                url = _practitioner_role_by_location_url(
+                    context.base_url, location_id, context.page_size
+                )
                 pending_batches.append((batch_key, url))
 
             def _handle_batch_result(
@@ -631,7 +662,9 @@ class StateScopedDiscovery(DiscoveryStrategy):
                     had_errors = True
                     stats.failed_batches.append((batch_key, repr(result)))
                     if cp is not None:
-                        cp.mark_error(checkpoint_id, "practitioner_role_by_location", batch_key, repr(result))
+                        cp.mark_error(
+                            checkpoint_id, "practitioner_role_by_location", batch_key, repr(result)
+                        )
                     log.error(
                         "PractitionerRole batch %s failed - continuing with remaining "
                         "batches (this batch's practitioners will be missing this run): %r",
@@ -655,7 +688,12 @@ class StateScopedDiscovery(DiscoveryStrategy):
                     stats.role_queries_empty += 1
                 context.apply_role_entries(result, resources, roles, stats)
                 if cp is not None:
-                    cp.mark_done(checkpoint_id, "practitioner_role_by_location", batch_key, {"entries": result})
+                    cp.mark_done(
+                        checkpoint_id,
+                        "practitioner_role_by_location",
+                        batch_key,
+                        {"entries": result},
+                    )
 
             if context.max_concurrent > 1 and pending_batches:
                 # Concurrent path: apply/checkpoint each batch's result as
@@ -677,12 +715,17 @@ class StateScopedDiscovery(DiscoveryStrategy):
                 # checkpointed at a time, before the next one is requested.
                 for batch_key, url in pending_batches:
                     try:
-                        entries: list[dict[str, Any]] | Exception = context.fetch_role_page_entries(url, stats)
+                        entries: list[dict[str, Any]] | Exception = context.fetch_role_page_entries(
+                            url, stats
+                        )
                     except Exception as exc:
                         entries = exc
                     _handle_batch_result(batch_key, entries)
         else:
-            if cp is not None and cp.status(checkpoint_id, "practitioner_role_pages", "all") == "done":
+            if (
+                cp is not None
+                and cp.status(checkpoint_id, "practitioner_role_pages", "all") == "done"
+            ):
                 payload = cp.get_payload(checkpoint_id, "practitioner_role_pages", "all")
                 assert payload is not None
                 context.apply_role_entries(payload["entries"], resources, roles, stats)
@@ -707,7 +750,9 @@ class StateScopedDiscovery(DiscoveryStrategy):
                 else:
                     context.apply_role_entries(entries, resources, roles, stats)
                     if cp is not None:
-                        cp.mark_done(checkpoint_id, "practitioner_role_pages", "all", {"entries": entries})
+                        cp.mark_done(
+                            checkpoint_id, "practitioner_role_pages", "all", {"entries": entries}
+                        )
 
         # Group every PractitionerRole by its practitioner, across ALL pages,
         # before yielding anything - see the module docstring's "do not trust
@@ -716,7 +761,9 @@ class StateScopedDiscovery(DiscoveryStrategy):
         for role in roles:
             practitioner_ref = _parse_reference(role.get("practitioner"))
             if practitioner_ref is None:
-                log.warning("PractitionerRole %s has no resolvable practitioner reference", role.get("id"))
+                log.warning(
+                    "PractitionerRole %s has no resolvable practitioner reference", role.get("id")
+                )
                 continue
             roles_by_practitioner.setdefault(practitioner_ref, []).append(role)
 
@@ -820,7 +867,9 @@ def _generate_lastupdated_windows(
     return windows
 
 
-def _spool_entries(spool: ResourceSpool, entries: list[dict[str, Any]], stats: DiscoveryStats) -> None:
+def _spool_entries(
+    spool: ResourceSpool, entries: list[dict[str, Any]], stats: DiscoveryStats
+) -> None:
     """Write one batch/window's fetched resources into the spool, computing
     the ``practitioner_ref`` index column and duplicate stats along the way.
 
@@ -969,12 +1018,17 @@ class NationalDiscovery(DiscoveryStrategy):
         pending_windows: list[tuple[str, str]] = []
         for window_index, (ge, le) in enumerate(windows):
             window_key = str(window_index)
-            if cp is not None and cp.status(checkpoint_id, "national_windows", window_key) == "done":
+            if (
+                cp is not None
+                and cp.status(checkpoint_id, "national_windows", window_key) == "done"
+            ):
                 continue
             url = _national_window_url(context.base_url, ge, le, context.page_size)
             pending_windows.append((window_key, url))
 
-        def _handle_window_result(window_key: str, result: list[dict[str, Any]] | Exception) -> None:
+        def _handle_window_result(
+            window_key: str, result: list[dict[str, Any]] | Exception
+        ) -> None:
             nonlocal had_errors
             if isinstance(result, Exception):
                 had_errors = True
@@ -1013,7 +1067,9 @@ class NationalDiscovery(DiscoveryStrategy):
         else:
             for window_key, url in pending_windows:
                 try:
-                    entries: list[dict[str, Any]] | Exception = context.fetch_role_page_entries(url, stats)
+                    entries: list[dict[str, Any]] | Exception = context.fetch_role_page_entries(
+                        url, stats
+                    )
                 except Exception as exc:
                     entries = exc
                 _handle_window_result(window_key, entries)

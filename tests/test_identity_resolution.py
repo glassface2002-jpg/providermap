@@ -28,7 +28,9 @@ from providermap.identity_resolution import (
 from providermap.models import IdentityConfidence, Organization
 
 
-def _binding(hospital: str | None, label: str | None, alt: str | None = None, state: str | None = None) -> dict:
+def _binding(
+    hospital: str | None, label: str | None, alt: str | None = None, state: str | None = None
+) -> dict:
     row: dict = {}
     if hospital is not None:
         row["hospital"] = {"type": "uri", "value": hospital}
@@ -180,7 +182,10 @@ class TestBackfillOrganizationAliases:
         )
         assert oid is not None
         index = WikidataAliasIndex(
-            by_name={"wellmont holston valley medical center": 0, "holston valley medical center": 0},
+            by_name={
+                "wellmont holston valley medical center": 0,
+                "holston valley medical center": 0,
+            },
             by_name_state={},
             item_names=(
                 {
@@ -262,7 +267,9 @@ class TestHealthSystemCRUD:
 
 class TestOrganizationAliasCRUD:
     def test_add_alias_and_read_it_back(self, db: Database) -> None:
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         assert oid is not None
         db.add_organization_alias(
             oid, "Test Hosp", "test hosp", source="manual", confidence=IdentityConfidence.MEDIUM
@@ -273,7 +280,9 @@ class TestOrganizationAliasCRUD:
         assert aliases[0].confidence == IdentityConfidence.MEDIUM
 
     def test_adding_the_same_alias_twice_is_idempotent(self, db: Database) -> None:
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         assert oid is not None
         first = db.add_organization_alias(oid, "Test Hosp", "test hosp")
         second = db.add_organization_alias(oid, "Test Hosp", "test hosp")
@@ -283,10 +292,14 @@ class TestOrganizationAliasCRUD:
 
 class TestOrganizationSystemMembershipCRUD:
     def test_set_and_get_current_membership(self, db: Database) -> None:
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         sid = db.get_or_create_health_system("Test System", "test system")
         assert oid is not None
-        db.set_system_membership(oid, sid, source="manual_seed", confidence=IdentityConfidence.MEDIUM)
+        db.set_system_membership(
+            oid, sid, source="manual_seed", confidence=IdentityConfidence.MEDIUM
+        )
 
         membership = db.get_current_system_membership(oid)
         assert membership is not None
@@ -294,7 +307,9 @@ class TestOrganizationSystemMembershipCRUD:
         assert membership.valid_to is None
 
     def test_resetting_the_same_membership_is_idempotent(self, db: Database) -> None:
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         sid = db.get_or_create_health_system("Test System", "test system")
         assert oid is not None
         first = db.set_system_membership(oid, sid)
@@ -310,7 +325,9 @@ class TestOrganizationSystemMembershipCRUD:
     ) -> None:
         """An acquisition/rebrand is a new row, never an overwrite - history
         must be preserved (see OrganizationSystemMembership's docstring)."""
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         old_system = db.get_or_create_health_system("Old System", "old system")
         new_system = db.get_or_create_health_system("New System", "new system")
         assert oid is not None
@@ -330,8 +347,12 @@ class TestOrganizationSystemMembershipCRUD:
         assert old_row["valid_to"] is not None  # closed, not deleted
 
     def test_organizations_for_system_returns_only_current_members(self, db: Database) -> None:
-        oid1, _ = db.upsert_organization(Organization(name="Hospital A", source="CMS", source_id="1"))
-        oid2, _ = db.upsert_organization(Organization(name="Hospital B", source="CMS", source_id="2"))
+        oid1, _ = db.upsert_organization(
+            Organization(name="Hospital A", source="CMS", source_id="1")
+        )
+        oid2, _ = db.upsert_organization(
+            Organization(name="Hospital B", source="CMS", source_id="2")
+        )
         sid = db.get_or_create_health_system("Test System", "test system")
         other_sid = db.get_or_create_health_system("Other System", "other system")
         assert oid1 is not None and oid2 is not None
@@ -348,7 +369,9 @@ class TestForeignKeyIntegrity:
     protected by it."""
 
     def test_membership_with_nonexistent_system_raises(self, db: Database) -> None:
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         assert oid is not None
         with pytest.raises(sqlite3.IntegrityError):
             db.conn.execute(
@@ -403,12 +426,16 @@ class TestV6ToV7Migration:
         tables = {
             r["name"] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        assert {"health_systems", "organization_aliases", "organization_system_membership"} <= tables
+        assert {
+            "health_systems",
+            "organization_aliases",
+            "organization_system_membership",
+        } <= tables
         assert db.conn.execute("SELECT COUNT(*) FROM health_systems").fetchone()[0] == 0
 
-        version = db.conn.execute(
-            "SELECT value FROM schema_meta WHERE key='version'"
-        ).fetchone()["value"]
+        version = db.conn.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()[
+            "value"
+        ]
         assert int(version) >= 7
         db.close()
 
@@ -483,9 +510,7 @@ class TestGetCandidateKeys:
         db.add_organization_alias(
             oid, "Medium Alias", "medium alias", confidence=IdentityConfidence.MEDIUM
         )
-        db.add_organization_alias(
-            oid, "Low Alias", "low alias", confidence=IdentityConfidence.LOW
-        )
+        db.add_organization_alias(oid, "Low Alias", "low alias", confidence=IdentityConfidence.LOW)
         db.add_organization_alias(
             oid, "High Alias", "high alias", confidence=IdentityConfidence.HIGH
         )

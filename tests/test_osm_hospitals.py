@@ -124,7 +124,9 @@ class TestFetchOsmHospitalIndexGracefulSkip:
     def test_valid_cache_file_loads_and_builds_the_index(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
         cache = tmp_path / "osm_cache.json"
         cache.write_text(
-            json.dumps([_record("Thorek Memorial Hospital", "https://www.thorek.org/", state="IL")]),
+            json.dumps(
+                [_record("Thorek Memorial Hospital", "https://www.thorek.org/", state="IL")]
+            ),
             encoding="utf-8",
         )
         index = fetch_osm_hospital_index(str(cache))

@@ -22,7 +22,9 @@ from providermap.models import Confidence, Organization, ResolutionMethod
 
 class TestWebsiteCandidateCRUD:
     def test_add_and_read_back_a_promoted_candidate(self, db: Database) -> None:
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         assert oid is not None
         db.add_website_candidate(
             oid,
@@ -46,7 +48,9 @@ class TestWebsiteCandidateCRUD:
         """The concrete Phase 5.3 audit win: a HIFLD match that failed its
         reachability check must still be a queryable row, not silently
         dropped."""
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         assert oid is not None
         db.add_website_candidate(
             oid,
@@ -64,7 +68,9 @@ class TestWebsiteCandidateCRUD:
     def test_multiple_candidates_for_the_same_organization_are_all_kept(self, db: Database) -> None:
         """A rejected HIFLD candidate followed by a successful guess must
         both survive - logging is additive, never a single-slot overwrite."""
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         assert oid is not None
         db.add_website_candidate(
             oid, "https://dead.example", ResolutionMethod.HIFLD, reachable=False, promoted=False
@@ -84,7 +90,9 @@ class TestWebsiteCandidateCRUD:
     def test_optional_system_membership_reference(self, db: Database) -> None:
         """The one-directional, nullable tie to the identity layer - a
         candidate may cite a membership row, but it's optional."""
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         sid = db.get_or_create_health_system("Test System", "test system")
         assert oid is not None
         membership_id = db.set_system_membership(oid, sid)
@@ -101,7 +109,9 @@ class TestWebsiteCandidateCRUD:
         assert candidates[0].system_membership_id == membership_id
 
     def test_no_candidates_returns_empty_list(self, db: Database) -> None:
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         assert oid is not None
         assert db.get_candidates_for_organization(oid) == []
 
@@ -115,7 +125,9 @@ class TestForeignKeyIntegrity:
             )
 
     def test_candidate_with_nonexistent_system_membership_raises(self, db: Database) -> None:
-        oid, _ = db.upsert_organization(Organization(name="Test Hospital", source="CMS", source_id="1"))
+        oid, _ = db.upsert_organization(
+            Organization(name="Test Hospital", source="CMS", source_id="1")
+        )
         assert oid is not None
         with pytest.raises(sqlite3.IntegrityError):
             db.conn.execute(
@@ -171,9 +183,9 @@ class TestV7ToV8Migration:
         assert "website_candidates" in tables
         assert db.conn.execute("SELECT COUNT(*) FROM website_candidates").fetchone()[0] == 0
 
-        version = db.conn.execute(
-            "SELECT value FROM schema_meta WHERE key='version'"
-        ).fetchone()["value"]
+        version = db.conn.execute("SELECT value FROM schema_meta WHERE key='version'").fetchone()[
+            "value"
+        ]
         assert int(version) >= 8
         db.close()
 

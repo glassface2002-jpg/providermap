@@ -54,3 +54,6 @@ Thumbs.db
 .ruff_cache/
 htmlcov/
 .coverage
+
+# One-off local run/monitor scripts (machine-specific paths)
+run_*_monitor.ps1

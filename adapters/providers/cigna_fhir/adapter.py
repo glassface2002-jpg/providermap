@@ -489,9 +489,7 @@ def _unscoped_search_url(base_url: str, page_size: int) -> str:
     )
 
 
-def _national_window_url(
-    base_url: str, ge: str | None, le: str | None, page_size: int
-) -> str:
+def _national_window_url(base_url: str, ge: str | None, le: str | None, page_size: int) -> str:
     """Build a national (unscoped) ``PractitionerRole`` search for one
     ``_lastUpdated`` window - see
     ``NATIONAL_DISCOVERY_DESIGN.md``'s national sequence and finding 1 in
@@ -707,9 +705,13 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
     # discover
     # ------------------------------------------------------------------ #
 
-    def _fetch_timed(self, url: str, endpoint: str, stats: DiscoveryStats, is_continuation: bool) -> dict[str, Any]:
+    def _fetch_timed(
+        self, url: str, endpoint: str, stats: DiscoveryStats, is_continuation: bool
+    ) -> dict[str, Any]:
         started = time.monotonic()
-        bundle = _fetch_with_retry_sync(self._page_fetcher, url, self._retry_config, stats, endpoint)
+        bundle = _fetch_with_retry_sync(
+            self._page_fetcher, url, self._retry_config, stats, endpoint
+        )
         stats.record_bundle_health(bundle, endpoint)
         stats.record_request(endpoint, time.monotonic() - started, is_continuation)
         return bundle
@@ -866,10 +868,20 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
         request finished, which held all ~42,000 results in memory at once
         on a real state-scale run (measured contributing to a 5.61 GB peak
         RSS on the smallest state tested) before any of them were applied
-        or checkpointed. This version holds at most ``max_concurrent``
-        completed-but-not-yet-consumed results at a time, since every task
-        beyond that is still blocked on the semaphore and hasn't fetched
-        anything yet.
+        or checkpointed. This version still schedules every task up front
+        (needed for the deterministic-ordering guarantee above), but each
+        completed Task's slot in ``tasks`` is cleared the moment its result
+        is consumed (see ``run_with`` below) - a completed ``asyncio.Task``
+        keeps its coroutine's return value cached on itself for its own
+        lifetime (``Future._result``, never cleared by ``result()``), so
+        without that clear, every batch's parsed FHIR bundle stays reachable
+        through the still-referenced Task for the rest of the whole
+        fetch phase, not just until consumed - measured on a live Rhode
+        Island run to retain 4+ GB of parsed response data this way before
+        this fix. Steady-state retention is now bounded by how far
+        completion can run ahead of consumption (the semaphore limit, plus
+        whatever the consumer is doing between iterations), not by the
+        total number of batches in the state.
 
         ``client`` is an injectable seam for tests (an ``httpx.AsyncClient``
         built on ``httpx.MockTransport``, no real network) - production code
@@ -878,7 +890,9 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
         semaphore = asyncio.Semaphore(self._max_concurrent)
         limiter = _RateLimiter(self._requests_per_second)
 
-        async def fetch_one(active_client: httpx.AsyncClient, url: str) -> list[dict[str, Any]] | Exception:
+        async def fetch_one(
+            active_client: httpx.AsyncClient, url: str
+        ) -> list[dict[str, Any]] | Exception:
             async with semaphore:
                 await limiter.acquire()
                 try:
@@ -886,10 +900,25 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
                 except Exception as exc:  # noqa: BLE001 - any failure is a per-batch result
                     return exc
 
-        async def run_with(active_client: httpx.AsyncClient) -> AsyncIterator[tuple[str, list[dict[str, Any]] | Exception]]:
-            tasks = [asyncio.ensure_future(fetch_one(active_client, url)) for _key, url in pending]
-            for (batch_key, _url), task in zip(pending, tasks, strict=True):
-                yield batch_key, await task
+        async def run_with(
+            active_client: httpx.AsyncClient,
+        ) -> AsyncIterator[tuple[str, list[dict[str, Any]] | Exception]]:
+            tasks: list[asyncio.Future[list[dict[str, Any]] | Exception] | None] = [
+                asyncio.ensure_future(fetch_one(active_client, url)) for _key, url in pending
+            ]
+            for i, (batch_key, _url) in enumerate(pending):
+                task = tasks[i]
+                assert task is not None  # each slot is awaited exactly once, then cleared
+                result = await task
+                # Drop the only reference that outlives this iteration - a
+                # completed Task keeps its result cached on itself for as
+                # long as the Task is reachable, so leaving this slot set
+                # would keep every batch's parsed bundle alive until the
+                # whole phase (all ~42,000 batches) finishes. `tasks` is
+                # built by comprehension over `pending`, so the two are
+                # always the same length by construction.
+                tasks[i] = None
+                yield batch_key, result
 
         if client is not None:
             async for item in run_with(client):
@@ -928,7 +957,7 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
             if resource["resourceType"] == "PractitionerRole" and not is_duplicate:
                 roles.append(resource)
 
-    def _build_discovery_context(self, stats: DiscoveryStats) -> "DiscoveryContext":
+    def _build_discovery_context(self, stats: DiscoveryStats) -> DiscoveryContext:
         """Assemble the thin, adapter-independent context a
         :class:`~adapters.providers.cigna_fhir.discovery.DiscoveryStrategy`
         runs against - see ``discovery.py``'s module docstring for why this
@@ -1130,9 +1159,7 @@ class CignaFhirAdapter(ProviderDatasetAdapter):
             npi=npi,
             npi_valid=npi_checksum_valid(npi) if npi else True,
             location_count=len(locations) or 1,
-            accepting_new_patients=_any_or_none(
-                [r["accepting_new_patients"] for r in roles]
-            ),
+            accepting_new_patients=_any_or_none([r["accepting_new_patients"] for r in roles]),
             languages=extracted["languages"],
             source_notes="Cigna FHIR Provider Directory",
         )

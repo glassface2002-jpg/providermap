@@ -265,7 +265,9 @@ def cmd_refresh_osm_cache(config: Config, args: argparse.Namespace) -> None:
     pbf_path = args.pbf_path or str(Path(config.organizations.osm_cache_path).with_suffix(".pbf"))
     print(f"\nDownloading/parsing {config.organizations.osm_pbf_url} -> {pbf_path}")
     print("(this can take a while - a ~12GB one-time/periodic download, not a per-run cost)\n")
-    count = refresh_osm_cache(config.organizations.osm_pbf_url, config.organizations.osm_cache_path, pbf_path)
+    count = refresh_osm_cache(
+        config.organizations.osm_pbf_url, config.organizations.osm_cache_path, pbf_path
+    )
     print(f"Wrote {count} hospital records to {config.organizations.osm_cache_path}\n")
 
 
@@ -576,7 +578,7 @@ def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
         "excluded": 0,
         "errors": 0,
     }
-    seen_location_keys: set[str] = set()
+    seen_location_keys: set[str | None] = set()
     seen_org_keys: set[tuple[str | None, str | None]] = set()
     started_at = datetime.now(timezone.utc)
 
@@ -638,7 +640,9 @@ def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
                     seen_org_keys.add(org_key)
                 organization_id, _ = db.upsert_organization(org)
                 if provider_id is not None and organization_id is not None:
-                    db.link_provider_organization(provider_id, organization_id, source=adapter.source)
+                    db.link_provider_organization(
+                        provider_id, organization_id, source=adapter.source
+                    )
     except Exception as exc:
         fatal_error = exc
         log.exception("Discovery aborted for %s - recording the partial run", adapter.name)
@@ -657,10 +661,7 @@ def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
     failed_batch_count = len(getattr(stats, "failed_batches", []) or [])
     stale_restarts = getattr(stats, "stale_cursor_restarts", 0)
     run_failed = (
-        fatal_error is not None
-        or tally["errors"] > 0
-        or failed_batch_count > 0
-        or silent_failure
+        fatal_error is not None or tally["errors"] > 0 or failed_batch_count > 0 or silent_failure
     )
 
     # Reuses the existing generic runs columns rather than adding
@@ -712,10 +713,16 @@ def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
         print(f"  reference hits / misses  : {stats.reference_hits} / {stats.reference_misses}")
         print(f"  retry count              : {stats.retry_count}")
         avg = stats.average_latency_seconds
-        print(f"  avg request latency      : {avg:.3f}s" if avg is not None else "  avg request latency      : n/a")
+        print(
+            f"  avg request latency      : {avg:.3f}s"
+            if avg is not None
+            else "  avg request latency      : n/a"
+        )
         print(f"  discover() runtime       : {stats.runtime_seconds:.1f}s")
         if stats.failed_batches:
-            print(f"  failed batches           : {len(stats.failed_batches)} (see logs for details)")
+            print(
+                f"  failed batches           : {len(stats.failed_batches)} (see logs for details)"
+            )
 
         # Correctness instrumentation - separate from the profiling numbers
         # above, which are about cost. These are about whether the run's
@@ -749,7 +756,9 @@ def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
             f"{stats.provider_location_relationships_discovered}"
         )
         if stats.suspected_silent_failure:
-            print("  *** SILENT FAILURE SIGNATURE(S) DETECTED - this run's data may be incomplete ***")
+            print(
+                "  *** SILENT FAILURE SIGNATURE(S) DETECTED - this run's data may be incomplete ***"
+            )
         else:
             print("  no silent-failure signatures detected")
 
@@ -1001,9 +1010,7 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
                 else:
                     va_confidence = Confidence.LOW
                     va_low += 1
-                db.set_organization_website(
-                    org.organization_id, va_url, va_confidence, source="VA"
-                )
+                db.set_organization_website(org.organization_id, va_url, va_confidence, source="VA")
                 db.add_website_candidate(
                     org.organization_id,
                     va_url,

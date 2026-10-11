@@ -9,6 +9,8 @@ Every NPI referenced here (``JANE_DOE_NPI``, ``ORG_1_NPI``,
 from __future__ import annotations
 
 import asyncio
+import gc
+import weakref
 from typing import Any
 
 import httpx
@@ -126,18 +128,14 @@ class TestOneLocationPerRequest:
     """
 
     def test_url_builder_emits_exactly_one_location_id(self, config: Config) -> None:
-        url = _practitioner_role_by_location_url(
-            config.providers.cigna_fhir_base_url, "loc-a", 50
-        )
+        url = _practitioner_role_by_location_url(config.providers.cigna_fhir_base_url, "loc-a", 50)
         assert "location=loc-a&" in url or url.endswith("location=loc-a")
         assert "," not in url.split("location=")[1].split("&")[0], (
             "the location filter must carry exactly one id - a comma-joined "
             "list silently drops all but one on this server"
         )
 
-    def test_discovery_issues_one_request_per_location_not_one_batch(
-        self, config: Config
-    ) -> None:
+    def test_discovery_issues_one_request_per_location_not_one_batch(self, config: Config) -> None:
         config.providers.cigna_fhir_state = "RI"
         pc = config.providers
         location_url = _location_search_url(pc.cigna_fhir_base_url, "RI", pc.cigna_fhir_page_size)
@@ -232,7 +230,9 @@ class TestDiscoverStateScoped:
             },
         )
         list(adapter.discover())
-        assert adapter.last_request_count == 3  # one Location page + one PractitionerRole query per location
+        assert (
+            adapter.last_request_count == 3
+        )  # one Location page + one PractitionerRole query per location
 
     def test_extract_and_normalize_state_scoped_record(self, config: Config) -> None:
         config.providers.cigna_fhir_state = "RI"
@@ -343,9 +343,7 @@ class TestDiscoveryStats:
         assert stats.reference_hits == 1
         assert stats.reference_misses == 0
 
-    def test_providers_yielded_and_runtime_recorded(
-        self, config: Config, initial_url: str
-    ) -> None:
+    def test_providers_yielded_and_runtime_recorded(self, config: Config, initial_url: str) -> None:
         adapter = _adapter_with_pages(config, {initial_url: PAGE_1, PAGE_2_URL: PAGE_2})
         list(adapter.discover())
         stats = adapter.last_discovery_stats
@@ -535,9 +533,7 @@ class TestNormalize:
         assert provider.city == "Hartford"
         assert provider.specialty == "Family Medicine"
 
-    def test_all_locations_present_not_just_primary(
-        self, normalized: NormalizedProvider
-    ) -> None:
+    def test_all_locations_present_not_just_primary(self, normalized: NormalizedProvider) -> None:
         assert len(normalized.locations) == 2
         assert all(isinstance(loc, Location) for loc in normalized.locations)
         addresses = {loc.address for loc in normalized.locations}
@@ -625,9 +621,7 @@ class TestPrimaryLocationDeterminism:
         assert forward == backward
         assert forward == "200 loc-y St"  # loc-y wins outright (2 distinct roles vs 1)
 
-    def test_exact_tie_breaks_to_smallest_location_id_not_first_seen(
-        self, config: Config
-    ) -> None:
+    def test_exact_tie_breaks_to_smallest_location_id_not_first_seen(self, config: Config) -> None:
         # loc-z is seen first (would have won under first-seen); the tie
         # must instead break to the lexicographically smallest id, loc-a.
         raw = _determinism_raw([("r-1", ["loc-z"]), ("r-2", ["loc-a"])])
@@ -735,7 +729,11 @@ class TestPrimaryLocationDeterminism:
         }
         pages = {location_url: location_bundle}
         for lid, bundle in [("loc-b", bundle_b), ("loc-c", bundle_c), ("loc-a", bundle_a)]:
-            pages[_practitioner_role_by_location_url(pc.cigna_fhir_base_url, lid, pc.cigna_fhir_page_size)] = bundle
+            pages[
+                _practitioner_role_by_location_url(
+                    pc.cigna_fhir_base_url, lid, pc.cigna_fhir_page_size
+                )
+            ] = bundle
 
         adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher(pages))
         records = list(adapter.discover())
@@ -818,9 +816,7 @@ class TestSilentFailureInstrumentation:
         # The healthy batch still yields - one bad batch never aborts a run.
         assert {r["practitioner"]["id"] for r in records} == {"practitioner-ri"}
 
-    def test_transient_total_zero_recovered_by_retry_is_not_a_failure(
-        self, config: Config
-    ) -> None:
+    def test_transient_total_zero_recovered_by_retry_is_not_a_failure(self, config: Config) -> None:
         """A total:0 page that a retry fixes is a blip, not a silent
         failure: the run must complete clean, with the recovery visible
         only in the retry counter."""
@@ -859,9 +855,7 @@ class TestSilentFailureInstrumentation:
         assert stats.failed_batches == []
         assert {r["practitioner"]["id"] for r in records} == {"practitioner-ri"}
 
-    def test_fresh_enumeration_total_zero_fails_the_run_loudly(
-        self, config: Config
-    ) -> None:
+    def test_fresh_enumeration_total_zero_fails_the_run_loudly(self, config: Config) -> None:
         """A persistent total:0 on a FRESH location-enumeration walk (no
         resumed cursor to blame) is a genuine silent failure: the old
         behavior recorded an undercounted enumeration as normal completion;
@@ -954,9 +948,7 @@ class TestSilentFailureInstrumentation:
         assert cp2.is_complete("cigna_fhir:RI") is True
         cp2.close()
 
-    def test_genuinely_empty_bundle_is_not_flagged_as_silent_failure(
-        self, config: Config
-    ) -> None:
+    def test_genuinely_empty_bundle_is_not_flagged_as_silent_failure(self, config: Config) -> None:
         """loc-b legitimately has no roles (no ``total`` key at all, matching
         what the live server returns for a normal empty result) - this must
         NOT set suspected_silent_failure. ~94% of locations are like this on
@@ -985,9 +977,7 @@ class TestSilentFailureInstrumentation:
         assert stats.empty_bundles_by_endpoint == {"PractitionerRole": 1}
         assert stats.suspected_silent_failure is False
 
-    def test_location_enumeration_page_count_and_normal_termination(
-        self, config: Config
-    ) -> None:
+    def test_location_enumeration_page_count_and_normal_termination(self, config: Config) -> None:
         config.providers.cigna_fhir_state = "RI"
         pc = config.providers
         location_url = _location_search_url(pc.cigna_fhir_base_url, "RI", pc.cigna_fhir_page_size)
@@ -1065,7 +1055,11 @@ class TestSilentFailureInstrumentation:
 
         cp1 = CheckpointStore(checkpoint_path)
         fetch1, _calls1 = _counting_fetcher(
-            {location_url: STATE_LOCATION_BUNDLE, role_url_a: STATE_ROLE_BUNDLE, role_url_b: _EMPTY_BUNDLE},
+            {
+                location_url: STATE_LOCATION_BUNDLE,
+                role_url_a: STATE_ROLE_BUNDLE,
+                role_url_b: _EMPTY_BUNDLE,
+            },
             fail_on={role_url_b},
         )
         adapter1 = CignaFhirAdapter(config, page_fetcher=fetch1, checkpoint_store=cp1)
@@ -1075,7 +1069,11 @@ class TestSilentFailureInstrumentation:
 
         cp2 = CheckpointStore(checkpoint_path)
         fetch2, calls2 = _counting_fetcher(
-            {location_url: STATE_LOCATION_BUNDLE, role_url_a: STATE_ROLE_BUNDLE, role_url_b: _EMPTY_BUNDLE}
+            {
+                location_url: STATE_LOCATION_BUNDLE,
+                role_url_a: STATE_ROLE_BUNDLE,
+                role_url_b: _EMPTY_BUNDLE,
+            }
         )
         adapter2 = CignaFhirAdapter(config, page_fetcher=fetch2, checkpoint_store=cp2)
         list(adapter2.discover())
@@ -1205,7 +1203,9 @@ class TestLocationEnumerationResumability:
         # mid-walk) - page 1 must already be checkpointed by the time this
         # propagates, since _on_page fires before the loop attempts page 2.
         cp1 = CheckpointStore(checkpoint_path)
-        fetch1, calls1 = _counting_fetcher({page1_url: page1, page2_url: page2}, fail_on={page2_url})
+        fetch1, calls1 = _counting_fetcher(
+            {page1_url: page1, page2_url: page2}, fail_on={page2_url}
+        )
         adapter1 = CignaFhirAdapter(config, page_fetcher=fetch1, checkpoint_store=cp1)
         with pytest.raises(RuntimeError):
             list(adapter1.discover())
@@ -1223,7 +1223,12 @@ class TestLocationEnumerationResumability:
         # NOT be re-fetched.
         cp2 = CheckpointStore(checkpoint_path)
         fetch2, calls2 = _counting_fetcher(
-            {page1_url: page1, page2_url: page2, role_url_a: STATE_ROLE_BUNDLE, role_url_b: _EMPTY_BUNDLE}
+            {
+                page1_url: page1,
+                page2_url: page2,
+                role_url_a: STATE_ROLE_BUNDLE,
+                role_url_b: _EMPTY_BUNDLE,
+            }
         )
         adapter2 = CignaFhirAdapter(config, page_fetcher=fetch2, checkpoint_store=cp2)
         records = list(adapter2.discover())
@@ -1263,7 +1268,9 @@ class TestLocationEnumerationResumability:
         checkpoint_path = tmp_path / "checkpoints.db"
 
         cp1 = CheckpointStore(checkpoint_path)
-        fetch1, _calls1 = _counting_fetcher({page1_url: page1, page2_url: page2}, fail_on={page2_url})
+        fetch1, _calls1 = _counting_fetcher(
+            {page1_url: page1, page2_url: page2}, fail_on={page2_url}
+        )
         adapter1 = CignaFhirAdapter(config, page_fetcher=fetch1, checkpoint_store=cp1)
         with pytest.raises(RuntimeError):
             list(adapter1.discover())
@@ -1324,7 +1331,12 @@ class TestLocationEnumerationResumability:
         adapter = CignaFhirAdapter(
             config,
             page_fetcher=make_fetcher(
-                {page1_url: page1, page2_url: page2, role_url_a: STATE_ROLE_BUNDLE, role_url_b: _EMPTY_BUNDLE}
+                {
+                    page1_url: page1,
+                    page2_url: page2,
+                    role_url_a: STATE_ROLE_BUNDLE,
+                    role_url_b: _EMPTY_BUNDLE,
+                }
             ),
             checkpoint_store=cp,
         )
@@ -1622,9 +1634,7 @@ class TestConcurrency:
 
         stats = DiscoveryStats()
         results = asyncio.run(
-            _drain_concurrent(
-                adapter, [("0", role_url_a), ("1", role_url_b)], stats, client
-            )
+            _drain_concurrent(adapter, [("0", role_url_a), ("1", role_url_b)], stats, client)
         )
         asyncio.run(client.aclose())
 
@@ -1672,9 +1682,7 @@ class TestConcurrency:
 
         adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}))
         stats = DiscoveryStats()
-        results = asyncio.run(
-            _drain_concurrent(adapter, [("0", role_url_a)], stats, client)
-        )
+        results = asyncio.run(_drain_concurrent(adapter, [("0", role_url_a)], stats, client))
         asyncio.run(client.aclose())
 
         assert not isinstance(results["0"], Exception)
@@ -1691,9 +1699,7 @@ class TestConcurrency:
 
         adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}))
         stats = DiscoveryStats()
-        results = asyncio.run(
-            _drain_concurrent(adapter, [("0", role_url_a)], stats, client)
-        )
+        results = asyncio.run(_drain_concurrent(adapter, [("0", role_url_a)], stats, client))
         asyncio.run(client.aclose())
 
         assert isinstance(results["0"], Exception)
@@ -1726,6 +1732,110 @@ class TestConcurrency:
         stats = adapter.last_discovery_stats
         assert len(stats.failed_batches) == 1
         assert stats.failed_batches[0][0] == "1"
+
+
+class _TrackedList(list):  # type: ignore[type-arg]
+    """A weakref-able list subclass, used only so tests can hold a
+    ``weakref.ref`` to a fetched batch's result - a plain ``list`` (what
+    production code actually returns) does not support weak references.
+    Going through a real JSON round-trip (``httpx.Response(json=...)`` then
+    the client's ``response.json()``) always produces plain ``dict``/``list``
+    regardless of what was serialized, so there is no way to preserve a
+    custom type across that path - this is why the fetch method itself is
+    stubbed below instead of routing through MockTransport."""
+
+
+class TestBatchResultReachability:
+    """Regression coverage for the retention bug found via a live 5.8h RI
+    run: a completed asyncio.Task keeps its coroutine's return value cached
+    on itself for as long as the Task is reachable (see
+    asyncio/futures.py's Future._result - never cleared by result()). The
+    `tasks` list in _fetch_batches_concurrently used to never drop a
+    completed Task, so every batch's parsed FHIR bundle stayed reachable
+    until the ENTIRE phase finished (measured: 4+ GB retained on live data)
+    even though the caller had already consumed and wanted to discard it.
+
+    This asserts the actual property that matters - a consumed batch's
+    result becomes garbage-collectable promptly, not just "eventually at
+    the end of discover()" - via weakref liveness, not memory/RSS sampling
+    (which is slow and timing-flaky in CI). Deliberately does NOT assert on
+    tracemalloc/psutil numbers, and deliberately does NOT inspect the
+    `tasks` list or slot-clearing directly - it tests the observable
+    contract, so it keeps failing the same way against any future
+    regression that re-introduces the retention, regardless of mechanism.
+    """
+
+    async def _consume(
+        self,
+        adapter: CignaFhirAdapter,
+        pending: list,
+        stats,
+        weakrefs: list,  # type: ignore[type-arg]
+        *,
+        n_batches: int,
+    ) -> None:
+        consumed = 0
+        async for _batch_key, result in adapter._fetch_batches_concurrently(pending, stats):
+            assert not isinstance(result, Exception)
+            weakrefs.append(weakref.ref(result))
+            consumed += 1
+            gc.collect()
+            # Every batch STRICTLY BEFORE this one must now be unreachable -
+            # this one's own `result` is still legitimately alive in this
+            # frame's local, so it is excluded from the check. The LAST
+            # batch is deliberately NOT checked in here at all (see the
+            # caller) - the coroutine currently driving this loop is itself
+            # running inside an asyncio Task, and that Task transiently
+            # keeps a strong reference to the last thing it awaited until
+            # the Task finishes stepping (verified empirically via
+            # gc.get_referrers: a finished `fetch_one()` Task, not `tasks`,
+            # was the referrer) - that unwinds once asyncio.run() itself
+            # returns, not while still inside the running coroutine.
+            for j in range(consumed - 1):
+                assert weakrefs[j]() is None, (
+                    f"batch {j}'s result is still reachable after batch "
+                    f"{consumed - 1} was consumed - a completed batch's data "
+                    "is being kept alive past the point the caller consumed it"
+                )
+        assert consumed == n_batches
+
+    def test_consumed_batch_results_become_collectable(self, config: Config) -> None:
+        config.providers.cigna_fhir_state = "RI"
+        # Small concurrency window (not 1, not unbounded) so completion can
+        # run somewhat ahead of consumption without the whole phase
+        # finishing before the first result is even awaited - the failure
+        # mode this guards against only shows up when SOME batches are
+        # already-done-but-not-yet-consumed while others are still pending.
+        config.providers.cigna_fhir_max_concurrent_requests = 2
+
+        n_batches = 6
+        # URLs are never actually dereferenced - _fetch_role_page_entries_async
+        # is stubbed below to bypass real HTTP/JSON entirely, since a real
+        # JSON round-trip (MockTransport -> response.json()) always produces
+        # plain dict/list regardless of what was serialized, which would
+        # make the weakref-based check impossible (see _TrackedList).
+        pending = [(f"loc-{i}", f"fake://loc-{i}") for i in range(n_batches)]
+
+        adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}), checkpoint_store=None)
+
+        async def fake_fetch_role_page_entries_async(client, url, s):  # noqa: ANN001, ARG001
+            i = int(url.rsplit("-", 1)[-1])
+            await asyncio.sleep(0.005 * (n_batches - i))  # staggered, not uniform
+            return _TrackedList([{"resourceType": "PractitionerRole", "id": f"role-{i}"}])
+
+        adapter._fetch_role_page_entries_async = fake_fetch_role_page_entries_async  # type: ignore[method-assign]
+        from adapters.providers.cigna_fhir.adapter import DiscoveryStats
+
+        stats = DiscoveryStats()
+        weakrefs: list[weakref.ReferenceType] = []  # type: ignore[type-arg]
+        asyncio.run(self._consume(adapter, pending, stats, weakrefs, n_batches=n_batches))
+
+        # Only checkable once the event loop has fully shut down - the Task
+        # that ran the coroutine above transiently holds the last thing it
+        # awaited until the Task itself finishes, independent of anything
+        # `_fetch_batches_concurrently` does (see `_consume`'s docstring).
+        gc.collect()
+        assert weakrefs[-1]() is None, "the final batch's result was never released"
 
 
 class TestSyncFetchRetry:
@@ -1765,9 +1875,7 @@ class TestSyncFetchRetry:
         assert calls["n"] == 2  # one failure, one retry
         assert adapter.last_discovery_stats.retry_count == 1
 
-    def test_location_enumeration_does_not_retry_non_retryable_status(
-        self, config: Config
-    ) -> None:
+    def test_location_enumeration_does_not_retry_non_retryable_status(self, config: Config) -> None:
         config.providers.cigna_fhir_state = "RI"
         calls = {"n": 0}
 
@@ -1855,9 +1963,7 @@ class TestPracticeNameAddressFiltering:
             "practitioner": {
                 "resourceType": "Practitioner",
                 "id": "pract-1",
-                "identifier": [
-                    {"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}
-                ],
+                "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}],
                 "name": [{"family": "Doe", "given": ["Jane"]}],
             },
             "roles": [
@@ -1892,9 +1998,7 @@ class TestPracticeNameAddressFiltering:
             },
         }
 
-    def test_generated_address_name_falls_back_to_organization_name(
-        self, config: Config
-    ) -> None:
+    def test_generated_address_name_falls_back_to_organization_name(self, config: Config) -> None:
         adapter = CignaFhirAdapter(config, page_fetcher=make_fetcher({}))
         raw = self._raw_record("45 WELLS ST # 104-WESTERLY-RI-02891")
 

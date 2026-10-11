@@ -183,12 +183,8 @@ class CheckpointStore:
     def clear(self, checkpoint_id: str) -> None:
         """Discard all state for this ``checkpoint_id`` - forces the next
         ``start_or_resume`` to be a fresh start rather than a resume."""
-        self.conn.execute(
-            "DELETE FROM checkpoint_items WHERE checkpoint_id=?", (checkpoint_id,)
-        )
-        self.conn.execute(
-            "DELETE FROM checkpoint_runs WHERE checkpoint_id=?", (checkpoint_id,)
-        )
+        self.conn.execute("DELETE FROM checkpoint_items WHERE checkpoint_id=?", (checkpoint_id,))
+        self.conn.execute("DELETE FROM checkpoint_runs WHERE checkpoint_id=?", (checkpoint_id,))
         self.conn.commit()
         self._writes_since_commit = 0
 

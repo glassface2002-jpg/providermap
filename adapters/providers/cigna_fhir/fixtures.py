@@ -50,9 +50,7 @@ PAGE_1: dict[str, Any] = {
             "resource": {
                 "resourceType": "Practitioner",
                 "id": "practitioner-jane-doe",
-                "identifier": [
-                    {"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}
-                ],
+                "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}],
                 "name": [{"family": "Doe", "given": ["Jane"], "suffix": ["MD"]}],
                 "communication": [{"text": "Spanish"}],
             }
@@ -109,9 +107,7 @@ PAGE_1: dict[str, Any] = {
             "resource": {
                 "resourceType": "Organization",
                 "id": "org-1",
-                "identifier": [
-                    {"system": "http://hl7.org/fhir/sid/us-npi", "value": ORG_1_NPI}
-                ],
+                "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi", "value": ORG_1_NPI}],
                 "name": "Hartford Family Health Group",
             }
         },

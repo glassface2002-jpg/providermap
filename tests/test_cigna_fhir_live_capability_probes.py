@@ -23,13 +23,16 @@ server still behaves the way the design assumes.
 
 from __future__ import annotations
 
+import os
+
 import httpx
 import pytest
 
 pytestmark = pytest.mark.live
 
 _BASE_URL = "https://fhir.cigna.com/ProviderDirectory/v1"
-_HEADERS = {"User-Agent": "ProviderMapBot/1.0 (+contact: glassface2002@gmail.com)"}
+_CONTACT = os.environ.get("PROVIDERMAP_CONTACT_EMAIL", "you@example.com")
+_HEADERS = {"User-Agent": f"ProviderMapBot/1.0 (+contact: {_CONTACT})"}
 _TIMEOUT = 45.0
 
 
@@ -156,7 +159,9 @@ class TestFinding3LocationIdCommaListReturnsAtMostOne:
             if entry.get("resource", {}).get("resourceType") == "Location"
         ]
         if len(ids) < 2:
-            pytest.skip("Fewer than 2 Location ids available right now - cannot exercise this probe")
+            pytest.skip(
+                "Fewer than 2 Location ids available right now - cannot exercise this probe"
+            )
         return ids
 
     def test_single_id_resolves(self, location_ids_from_a_real_role: list[str]) -> None:

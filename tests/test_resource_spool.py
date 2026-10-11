@@ -23,7 +23,11 @@ class TestUpsertAndGet:
 
     def test_upsert_then_get(self, spool: ResourceSpool) -> None:
         spool.upsert("Location", "loc-1", {"resourceType": "Location", "id": "loc-1", "name": "X"})
-        assert spool.get("Location", "loc-1") == {"resourceType": "Location", "id": "loc-1", "name": "X"}
+        assert spool.get("Location", "loc-1") == {
+            "resourceType": "Location",
+            "id": "loc-1",
+            "name": "X",
+        }
 
     def test_upsert_replaces_existing(self, spool: ResourceSpool) -> None:
         spool.upsert("Location", "loc-1", {"name": "old"})
@@ -108,18 +112,14 @@ class TestCommitBatching:
         with pytest.raises(ValueError):
             ResourceSpool(tmp_path / "spool.db", commit_every=0)
 
-    def test_default_commit_every_one_is_durable_after_every_write(
-        self, tmp_path: Path
-    ) -> None:
+    def test_default_commit_every_one_is_durable_after_every_write(self, tmp_path: Path) -> None:
         path = tmp_path / "spool.db"
         spool = ResourceSpool(path)  # default commit_every=1
         spool.upsert("Location", "loc-1", {"x": 1})
         assert _committed_row_count(path) == 1
         spool.close()
 
-    def test_batched_writes_are_not_durable_until_the_threshold(
-        self, tmp_path: Path
-    ) -> None:
+    def test_batched_writes_are_not_durable_until_the_threshold(self, tmp_path: Path) -> None:
         path = tmp_path / "spool.db"
         spool = ResourceSpool(path, commit_every=3)
         spool.upsert("Location", "loc-1", {"x": 1})
@@ -184,9 +184,7 @@ class TestDeterministicOrdering:
     function of the spooled data, not of SQLite's internal iteration
     order - both accessors sort explicitly."""
 
-    def test_roles_for_practitioner_ordered_by_resource_id(
-        self, spool: ResourceSpool
-    ) -> None:
+    def test_roles_for_practitioner_ordered_by_resource_id(self, spool: ResourceSpool) -> None:
         # Inserted deliberately out of lexicographic order.
         spool.upsert("PractitionerRole", "r-c", {"id": "r-c"}, practitioner_ref="p-1")
         spool.upsert("PractitionerRole", "r-a", {"id": "r-a"}, practitioner_ref="p-1")

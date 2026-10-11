@@ -217,7 +217,9 @@ def _build_alias_index(data: dict[str, object]) -> WikidataAliasIndex:
     )
 
 
-def fetch_wikidata_alias_index(user_agent: str, timeout_seconds: float = 60.0) -> WikidataAliasIndex:
+def fetch_wikidata_alias_index(
+    user_agent: str, timeout_seconds: float = 60.0
+) -> WikidataAliasIndex:
     """One bulk query for every US hospital Wikidata has a name for, grouped
     per-item for alias backfill (see module docstring for why this is a
     separate query from ``wikidata_hospitals.py``'s). Returns an empty index
@@ -277,9 +279,7 @@ def backfill_organization_aliases(
             continue
 
         orgs_matched += 1
-        other_names = {
-            norm: raw for norm, raw in index.item_names[item_idx].items() if norm != key
-        }
+        other_names = {norm: raw for norm, raw in index.item_names[item_idx].items() if norm != key}
         for normalized_alias, raw_alias in other_names.items():
             db.add_organization_alias(
                 organization_id=org.organization_id,

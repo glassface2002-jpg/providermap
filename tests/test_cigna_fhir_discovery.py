@@ -18,16 +18,18 @@ import pytest
 
 from adapters.providers.cigna_fhir.adapter import CignaFhirAdapter, _national_window_url
 from adapters.providers.cigna_fhir.discovery import (
-    DiscoveryContext,
     DiscoveryStrategy,
     NationalDiscovery,
     StateScopedDiscovery,
     _generate_lastupdated_windows,
     get_discovery_strategy,
 )
-from adapters.providers.cigna_fhir.fixtures import JANE_DOE_NPI, STATE_SCOPED_PRACTITIONER_NPI, make_fetcher
+from adapters.providers.cigna_fhir.fixtures import (
+    JANE_DOE_NPI,
+    STATE_SCOPED_PRACTITIONER_NPI,
+    make_fetcher,
+)
 from providermap.config import Config
-from providermap.resource_spool import ResourceSpool
 
 
 class TestGetDiscoveryStrategy:
@@ -57,7 +59,7 @@ class TestGenerateLastUpdatedWindows:
 
     def test_windows_are_contiguous(self) -> None:
         windows = _generate_lastupdated_windows(30, 90, datetime(2026, 1, 1, tzinfo=timezone.utc))
-        for (_, le), (ge, _) in zip(windows, windows[1:]):
+        for (_, le), (ge, _) in zip(windows, windows[1:], strict=False):
             assert le == ge
 
     def test_lookback_shorter_than_window_still_yields_at_least_two_windows(self) -> None:
@@ -97,7 +99,10 @@ def _window_urls(config: Config) -> list[str]:
     windows = _generate_lastupdated_windows(
         pc.cigna_fhir_window_days, pc.cigna_fhir_lookback_days, datetime.now(timezone.utc)
     )
-    return [_national_window_url(pc.cigna_fhir_base_url, ge, le, pc.cigna_fhir_page_size) for ge, le in windows]
+    return [
+        _national_window_url(pc.cigna_fhir_base_url, ge, le, pc.cigna_fhir_page_size)
+        for ge, le in windows
+    ]
 
 
 # A practitioner whose role references locations in two different states -
@@ -113,9 +118,7 @@ _MULTI_STATE_BUNDLE = {
             "resource": {
                 "resourceType": "Practitioner",
                 "id": "practitioner-multi",
-                "identifier": [
-                    {"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}
-                ],
+                "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}],
                 "name": [{"family": "Multi", "given": ["Prac"]}],
             }
         },
@@ -136,7 +139,12 @@ _MULTI_STATE_BUNDLE = {
                 "resourceType": "Location",
                 "id": "loc-ri",
                 "name": "RI Site",
-                "address": {"line": ["1 Main St"], "city": "Providence", "state": "RI", "postalCode": "02903"},
+                "address": {
+                    "line": ["1 Main St"],
+                    "city": "Providence",
+                    "state": "RI",
+                    "postalCode": "02903",
+                },
             }
         },
         {
@@ -144,7 +152,12 @@ _MULTI_STATE_BUNDLE = {
                 "resourceType": "Location",
                 "id": "loc-tx",
                 "name": "TX Site",
-                "address": {"line": ["2 Main St"], "city": "Austin", "state": "TX", "postalCode": "73301"},
+                "address": {
+                    "line": ["2 Main St"],
+                    "city": "Austin",
+                    "state": "TX",
+                    "postalCode": "73301",
+                },
             }
         },
         {
@@ -169,7 +182,9 @@ class TestNationalDiscoveryEndToEnd:
     def test_yields_bare_id_keyed_dict_shape(self, config: Config, tmp_path) -> None:  # type: ignore[no-untyped-def]
         _configure_national(config, tmp_path)
         urls = _window_urls(config)
-        pages = dict.fromkeys(urls, {"resourceType": "Bundle", "type": "searchset", "link": [], "entry": []})
+        pages = dict.fromkeys(
+            urls, {"resourceType": "Bundle", "type": "searchset", "link": [], "entry": []}
+        )
         # The multi-state bundle only needs to answer ONE window's URL; the
         # rest can be empty (they still get fetched, just contribute nothing).
         pages[urls[1]] = _MULTI_STATE_BUNDLE
@@ -195,7 +210,9 @@ class TestNationalDiscoveryEndToEnd:
         would drop the other (see NATIONAL_DISCOVERY_DESIGN.md Risk R1)."""
         _configure_national(config, tmp_path)
         urls = _window_urls(config)
-        pages = dict.fromkeys(urls, {"resourceType": "Bundle", "type": "searchset", "link": [], "entry": []})
+        pages = dict.fromkeys(
+            urls, {"resourceType": "Bundle", "type": "searchset", "link": [], "entry": []}
+        )
         pages[urls[1]] = _MULTI_STATE_BUNDLE
         adapter = _national_adapter(config, tmp_path, pages)
 
@@ -211,7 +228,9 @@ class TestNationalDiscoveryEndToEnd:
         StateScopedDiscovery's."""
         _configure_national(config, tmp_path)
         urls = _window_urls(config)
-        pages = dict.fromkeys(urls, {"resourceType": "Bundle", "type": "searchset", "link": [], "entry": []})
+        pages = dict.fromkeys(
+            urls, {"resourceType": "Bundle", "type": "searchset", "link": [], "entry": []}
+        )
         pages[urls[1]] = _MULTI_STATE_BUNDLE
         adapter = _national_adapter(config, tmp_path, pages)
 
@@ -228,31 +247,63 @@ class TestNationalDiscoveryEndToEnd:
         urls = _window_urls(config)
         shared_org = {"resourceType": "Organization", "id": "org-shared", "name": "Shared"}
         batch_a = {
-            "resourceType": "Bundle", "type": "searchset", "link": [],
+            "resourceType": "Bundle",
+            "type": "searchset",
+            "link": [],
             "entry": [
-                {"resource": {"resourceType": "Practitioner", "id": "p-a",
-                              "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}],
-                              "name": [{"family": "A", "given": ["Prac"]}]}},
-                {"resource": {"resourceType": "PractitionerRole", "id": "role-a",
-                              "practitioner": {"reference": "Practitioner/p-a"},
-                              "organization": {"reference": "Organization/org-shared"}}},
+                {
+                    "resource": {
+                        "resourceType": "Practitioner",
+                        "id": "p-a",
+                        "identifier": [
+                            {"system": "http://hl7.org/fhir/sid/us-npi", "value": JANE_DOE_NPI}
+                        ],
+                        "name": [{"family": "A", "given": ["Prac"]}],
+                    }
+                },
+                {
+                    "resource": {
+                        "resourceType": "PractitionerRole",
+                        "id": "role-a",
+                        "practitioner": {"reference": "Practitioner/p-a"},
+                        "organization": {"reference": "Organization/org-shared"},
+                    }
+                },
                 {"resource": shared_org},
             ],
         }
         batch_b = {
-            "resourceType": "Bundle", "type": "searchset", "link": [],
+            "resourceType": "Bundle",
+            "type": "searchset",
+            "link": [],
             "entry": [
-                {"resource": {"resourceType": "Practitioner", "id": "p-b",
-                              "identifier": [{"system": "http://hl7.org/fhir/sid/us-npi",
-                                              "value": STATE_SCOPED_PRACTITIONER_NPI}],
-                              "name": [{"family": "B", "given": ["Prac"]}]}},
-                {"resource": {"resourceType": "PractitionerRole", "id": "role-b",
-                              "practitioner": {"reference": "Practitioner/p-b"},
-                              "organization": {"reference": "Organization/org-shared"}}},
+                {
+                    "resource": {
+                        "resourceType": "Practitioner",
+                        "id": "p-b",
+                        "identifier": [
+                            {
+                                "system": "http://hl7.org/fhir/sid/us-npi",
+                                "value": STATE_SCOPED_PRACTITIONER_NPI,
+                            }
+                        ],
+                        "name": [{"family": "B", "given": ["Prac"]}],
+                    }
+                },
+                {
+                    "resource": {
+                        "resourceType": "PractitionerRole",
+                        "id": "role-b",
+                        "practitioner": {"reference": "Practitioner/p-b"},
+                        "organization": {"reference": "Organization/org-shared"},
+                    }
+                },
                 {"resource": shared_org},  # same org, second window
             ],
         }
-        pages = dict.fromkeys(urls, {"resourceType": "Bundle", "type": "searchset", "link": [], "entry": []})
+        pages = dict.fromkeys(
+            urls, {"resourceType": "Bundle", "type": "searchset", "link": [], "entry": []}
+        )
         pages[urls[0]] = batch_a
         pages[urls[1]] = batch_b
         adapter = _national_adapter(config, tmp_path, pages)

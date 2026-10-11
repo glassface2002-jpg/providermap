@@ -7,13 +7,13 @@ Preserved per the same "do not discard evidence" discipline as
 is a read-only GET; commands are reproducible verbatim.
 
 Base URL for all probes: `https://fhir.cigna.com/ProviderDirectory/v1`.
-User-Agent: `ProviderMapBot/1.0 (+contact: glassface2002@gmail.com)`.
+User-Agent: `ProviderMapBot/1.0 (+contact: you@example.com)`.
 
 ## Finding 1 — unscoped `PractitionerRole` with all three `_include`s works and returns the complete graph
 
 ```python
 import httpx
-H = {"User-Agent": "ProviderMapBot/1.0 (+contact: glassface2002@gmail.com)"}
+H = {"User-Agent": "ProviderMapBot/1.0 (+contact: you@example.com)"}
 B = "https://fhir.cigna.com/ProviderDirectory/v1"
 url = (f"{B}/PractitionerRole?_count=5"
        f"&_include=PractitionerRole:practitioner"

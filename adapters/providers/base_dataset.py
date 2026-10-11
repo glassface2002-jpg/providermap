@@ -99,9 +99,7 @@ class ProviderDatasetAdapter(ABC):
     #: can override this to ``True``.
     requires_profile_url: bool = False
 
-    def __init__(
-        self, config: Config, checkpoint_store: CheckpointStore | None = None
-    ) -> None:
+    def __init__(self, config: Config, checkpoint_store: CheckpointStore | None = None) -> None:
         self.config = config
         #: Optional durable resume support (see ``providermap/checkpoint.py``).
         #: ``None`` (the default) reproduces the original, non-resumable

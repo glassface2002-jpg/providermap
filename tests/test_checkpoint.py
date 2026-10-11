@@ -135,7 +135,9 @@ class TestClearPhase:
         # cleared one phase to redo it is still mid-run, not starting over.
         assert store.start_or_resume("run-1") is True
 
-    def test_clear_phase_on_an_empty_phase_is_a_harmless_no_op(self, store: CheckpointStore) -> None:
+    def test_clear_phase_on_an_empty_phase_is_a_harmless_no_op(
+        self, store: CheckpointStore
+    ) -> None:
         store.start_or_resume("run-1")
         store.clear_phase("run-1", "never-used-phase")  # must not raise
         assert store.status("run-1", "never-used-phase", "1") is None
@@ -167,9 +169,7 @@ class TestCommitBatching:
         with pytest.raises(ValueError):
             CheckpointStore(tmp_path / "checkpoints.db", commit_every=0)
 
-    def test_default_commit_every_one_is_durable_after_every_write(
-        self, tmp_path: Path
-    ) -> None:
+    def test_default_commit_every_one_is_durable_after_every_write(self, tmp_path: Path) -> None:
         path = tmp_path / "checkpoints.db"
         store = CheckpointStore(path)  # default commit_every=1
         store.mark_done("run-1", "phase", "1", {"v": 1})
@@ -177,9 +177,7 @@ class TestCommitBatching:
         assert _committed_status(path, "run-1", "phase", "1") == "done"
         store.close()
 
-    def test_batched_writes_are_not_durable_until_the_threshold(
-        self, tmp_path: Path
-    ) -> None:
+    def test_batched_writes_are_not_durable_until_the_threshold(self, tmp_path: Path) -> None:
         path = tmp_path / "checkpoints.db"
         store = CheckpointStore(path, commit_every=3)
         store.mark_done("run-1", "phase", "1", {"v": 1})
@@ -213,9 +211,7 @@ class TestCommitBatching:
         assert _committed_status(path, "run-1", "phase", "1") == "done"
         store.close()
 
-    def test_mark_complete_flushes_pending_batched_writes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_mark_complete_flushes_pending_batched_writes(self, tmp_path: Path) -> None:
         path = tmp_path / "checkpoints.db"
         store = CheckpointStore(path, commit_every=100)
         store.start_or_resume("run-1")

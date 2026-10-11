@@ -71,7 +71,6 @@ def get_organization_adapter_class(name: str) -> type[OrganizationAdapter]:
         raise ValueError(f"Unknown organization adapter '{name}'. Available: {available}") from None
 
 
-
 # ---------------------------------------------------------------------- #
 # Provider dataset/API adapters
 # ---------------------------------------------------------------------- #

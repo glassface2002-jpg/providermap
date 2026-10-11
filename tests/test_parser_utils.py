@@ -88,10 +88,7 @@ class TestMergeVcardTitleCredentials:
         assert merge_vcard_title_credentials("", "Daniel Treiyer, MD") == "MD"
 
     def test_title_supplies_credential_alongside_existing(self) -> None:
-        assert (
-            merge_vcard_title_credentials("APRN", "Jane Doe, APRN, FNP-C")
-            == "APRN, FNP-C"
-        )
+        assert merge_vcard_title_credentials("APRN", "Jane Doe, APRN, FNP-C") == "APRN, FNP-C"
 
     def test_no_vcard_title_leaves_creds_unchanged(self) -> None:
         assert merge_vcard_title_credentials("MD", None) == "MD"

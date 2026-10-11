@@ -40,8 +40,12 @@ def _role_urls(config: Config) -> tuple[str, str]:
 
     pc = config.providers
     return (
-        _practitioner_role_by_location_url(pc.cigna_fhir_base_url, "loc-a", pc.cigna_fhir_page_size),
-        _practitioner_role_by_location_url(pc.cigna_fhir_base_url, "loc-b", pc.cigna_fhir_page_size),
+        _practitioner_role_by_location_url(
+            pc.cigna_fhir_base_url, "loc-a", pc.cigna_fhir_page_size
+        ),
+        _practitioner_role_by_location_url(
+            pc.cigna_fhir_base_url, "loc-b", pc.cigna_fhir_page_size
+        ),
     )
 
 
@@ -125,7 +129,9 @@ class TestSpoolModeEquivalence:
         assert stats.role_queries_attempted == 2  # loc-a, loc-b
         assert stats.role_queries_empty == 1  # loc-b
         assert stats.providers_yielded == 1
-        assert stats.provider_location_relationships_discovered == 1  # the role references loc-a only
+        assert (
+            stats.provider_location_relationships_discovered == 1
+        )  # the role references loc-a only
 
 
 class TestSpoolModeResumability:
@@ -167,7 +173,12 @@ class TestSpoolModeResumability:
             return {
                 location_url: STATE_LOCATION_BUNDLE,
                 role_url_a: STATE_ROLE_BUNDLE,
-                role_url_b: {"resourceType": "Bundle", "type": "searchset", "link": [], "entry": []},
+                role_url_b: {
+                    "resourceType": "Bundle",
+                    "type": "searchset",
+                    "link": [],
+                    "entry": [],
+                },
             }[url]
 
         adapter2 = CignaFhirAdapter(spool_config, page_fetcher=fetch2, checkpoint_store=cp2)
@@ -230,7 +241,12 @@ class TestSpoolModeResumability:
                 page1_url: page1,
                 page2_url: page2,
                 role_url_a: STATE_ROLE_BUNDLE,
-                role_url_b: {"resourceType": "Bundle", "type": "searchset", "link": [], "entry": []},
+                role_url_b: {
+                    "resourceType": "Bundle",
+                    "type": "searchset",
+                    "link": [],
+                    "entry": [],
+                },
             }[url]
 
         adapter2 = CignaFhirAdapter(spool_config, page_fetcher=fetch2, checkpoint_store=cp2)

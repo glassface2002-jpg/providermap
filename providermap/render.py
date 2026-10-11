@@ -141,7 +141,7 @@ class PlaywrightFetcher:
                     wait_s = self.config.rendering.wait_after_load_seconds
                     if wait_s:
                         await page.wait_for_timeout(wait_s * 1000)
-                    html = await page.content()
+                    html: str = await page.content()
                     self._consecutive_errors = 0
                     if use_cache:
                         self.cache.put(url, html)

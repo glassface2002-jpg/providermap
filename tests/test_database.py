@@ -293,7 +293,11 @@ class TestLinkEnrichOnly:
 
         loc_b = db.upsert_location(
             Location(
-                address="2 GA St", city="GA", state="GA", zip="00000", address_key="2 ga st|GA|00000"
+                address="2 GA St",
+                city="GA",
+                state="GA",
+                zip="00000",
+                address_key="2 ga st|GA|00000",
             )
         )
         assert loc_b is not None

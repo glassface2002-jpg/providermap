@@ -1353,8 +1353,7 @@ class Database:
         uses for provider/organization links.
         """
         existing = self.conn.execute(
-            "SELECT id FROM organization_aliases "
-            "WHERE organization_id=? AND normalized_alias=?",
+            "SELECT id FROM organization_aliases " "WHERE organization_id=? AND normalized_alias=?",
             (organization_id, normalized_alias),
         ).fetchone()
         if existing is not None:
