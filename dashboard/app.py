@@ -2,13 +2,14 @@
 
 Reads the snapshot written by ``providermap build-map-data`` (a Parquet file
 plus ``build_info.json``). Deliberately imports nothing from the pipeline, so
-it deploys with just streamlit, plotly, pandas and pyarrow.
+it deploys with just streamlit, plotly, pydeck, pandas and pyarrow.
 
 Run locally:  streamlit run dashboard/app.py
 """
 
 from __future__ import annotations
 
+import html
 import json
 import math
 import os
@@ -17,6 +18,7 @@ from typing import Any
 
 import pandas as pd
 import plotly.express as px
+import pydeck as pdk
 import streamlit as st
 
 DATA_DIR = Path(os.environ.get("PROVIDERMAP_DATA_DIR", Path(__file__).parent / "data"))
@@ -43,7 +45,17 @@ TABLE_COLUMNS = [
     "npi",
     "site_confidence",
 ]
-MAP_STYLE = "open-street-map"
+MAP_STYLE = "carto-positron"  # density view; the location map uses pydeck's matching "light"
+LAYER_ID = "locations"
+DEFAULT_COLOR = COLORS[NOT_ASSESSED]
+DOT_ALPHA = 200
+
+# Dot size. The radius is in real-world metres (so dot area is proportional to the number of
+# providers and dots grow as you zoom in), clamped to a pixel range so they stay visible zoomed
+# out and stop growing at a cap. Tune these three if the map feels too small or too large.
+RADIUS_M_PER_SQRT_PROVIDER = 100
+MIN_RADIUS_PX = 4
+MAX_RADIUS_PX = 24
 
 
 @st.cache_data
@@ -108,7 +120,29 @@ def aggregate_locations(mapped: pd.DataFrame) -> pd.DataFrame:
         site_confidence=("site_confidence", lambda s: top(s)),
     ).reset_index()
     out["location_id"] = out.index
-    return out
+    out["radius_m"] = RADIUS_M_PER_SQRT_PROVIDER * out["providers"] ** 0.5
+    # Largest first, so small dots draw on top of big ones and stay clickable.
+    return out.sort_values("providers", ascending=False, ignore_index=True)
+
+
+def color_for(label: str) -> str:
+    return COLORS.get(label, DEFAULT_COLOR)
+
+
+def hex_to_rgba(hex_color: str, alpha: int = DOT_ALPHA) -> list[int]:
+    """``'#1f77b4'`` -> ``[31, 119, 180, 200]`` (deck.gl colours are RGBA lists)."""
+    digits = hex_color.lstrip("#")
+    return [int(digits[i : i + 2], 16) for i in (0, 2, 4)] + [alpha]
+
+
+def legend_markdown(labels: list[str]) -> str:
+    """Coloured-dot legend (deck.gl has none). Known labels first, in COLORS order."""
+    known = [label for label in COLORS if label in labels]
+    unknown = sorted(set(labels) - set(COLORS))
+    return "&nbsp;&nbsp;&nbsp;".join(
+        f"<span style='color:{color_for(label)}'>&#9679;</span> {html.escape(label)}"
+        for label in known + unknown
+    )
 
 
 def zoom_for(frame: pd.DataFrame) -> float:
@@ -120,10 +154,10 @@ def zoom_for(frame: pd.DataFrame) -> float:
 
 
 def selected_location_ids(event: Any) -> list[int]:
-    """Location ids of the markers clicked on the map (empty when nothing is selected)."""
-    if not event or not event.selection.points:
+    """Location ids of the dots clicked on the map (empty when nothing is selected)."""
+    if not event:
         return []
-    return [point["customdata"][0] for point in event.selection.points]
+    return [obj["location_id"] for obj in event.selection.objects.get(LAYER_ID, [])]
 
 
 def map_tab(df: pd.DataFrame) -> None:
@@ -151,44 +185,52 @@ def map_tab(df: pd.DataFrame) -> None:
     color_by = right.radio("Color by", ["Provider type", "Site confidence"], horizontal=True)
     color_col = "provider_type" if color_by == "Provider type" else "site_confidence"
     locations = aggregate_locations(mapped)
-    fig = px.scatter_map(
-        locations,
-        lat="lat",
-        lon="lon",
-        size="providers",
-        size_max=26,
-        color=color_col,
-        color_discrete_map=COLORS,
-        hover_name="site",
-        hover_data={
-            "address": True,
-            "providers": True,
-            "specialties": True,
-            "lat": False,
-            "lon": False,
-            color_col: False,
-        },
-        custom_data=["location_id"],
-        labels={"providers": "Providers", "address": "Address", "specialties": "Specialties"},
-        center=center,
-        zoom=zoom,
-        map_style=MAP_STYLE,
+    locations["color"] = locations[color_col].map(lambda label: hex_to_rgba(color_for(label)))
+    st.markdown(legend_markdown(locations[color_col].unique().tolist()), unsafe_allow_html=True)
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        id=LAYER_ID,
+        data=locations[
+            [
+                "lat",
+                "lon",
+                "location_id",
+                "radius_m",
+                "color",
+                "site",
+                "address",
+                "providers",
+                "specialties",
+            ]
+        ],
+        get_position=["lon", "lat"],
+        get_radius="radius_m",
+        radius_min_pixels=MIN_RADIUS_PX,
+        radius_max_pixels=MAX_RADIUS_PX,
+        get_fill_color="color",
+        stroked=True,
+        get_line_color=[255, 255, 255, 230],
+        line_width_min_pixels=1,
+        pickable=True,
+        auto_highlight=True,
     )
-    fig.update_layout(
-        margin={"l": 0, "r": 0, "t": 0, "b": 0}, height=600, legend_title_text=color_by
+    deck = pdk.Deck(
+        layers=[layer],
+        initial_view_state=pdk.ViewState(
+            latitude=center["lat"], longitude=center["lon"], zoom=zoom
+        ),
+        map_style="light",
+        tooltip={"text": "{site}\n{address}\nProviders: {providers}\n{specialties}"},
     )
-    event = st.plotly_chart(
-        fig,
-        width="stretch",
-        on_select="rerun",
-        selection_mode="points",
-        key="provider_map",
+    event = st.pydeck_chart(
+        deck, height=600, on_select="rerun", selection_mode="multi-object", key="provider_map"
     )
 
     selected = selected_location_ids(event)
     if not selected:
         st.caption(
-            "Marker size = number of providers at that location. Click markers to list their providers."
+            "Dot size = number of providers at that location, and dots grow as you zoom in. "
+            "Click a dot to list its providers."
         )
         return
     chosen = locations[locations["location_id"].isin(selected)]

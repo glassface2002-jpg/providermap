@@ -8,14 +8,12 @@ needs), these tests fail instead of the live dashboard.
 from __future__ import annotations
 
 import ast
-import base64
 import importlib.util
 import json
 import re
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
-import numpy as np
 import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -155,6 +153,15 @@ class TestAggregateLocations:
         assert providence["site"] == "Unnamed site"
         assert providence["specialties"] == ""
         assert sorted(out["location_id"]) == [0, 1]
+        assert orlando["radius_m"] == pytest.approx(dashboard.RADIUS_M_PER_SQRT_PROVIDER * 3**0.5)
+
+    def test_largest_first_and_dot_area_proportional_to_providers(self, dashboard: ModuleType):
+        rows = [_row(npi=str(i), lat=28.0, lon=-81.0) for i in range(4)]  # 4 providers
+        rows.append(_row(npi="9", lat=41.0, lon=-71.0))  # 1 provider
+        out = dashboard.aggregate_locations(pd.DataFrame(rows))
+        assert out["providers"].tolist() == [4, 1]
+        big, small = out["radius_m"]
+        assert (big / small) ** 2 == pytest.approx(4)  # area ratio equals provider ratio
 
 
 class TestZoomFor:
@@ -170,33 +177,76 @@ class TestZoomFor:
         assert dashboard.zoom_for(world) == 3
 
 
+class TestColors:
+    def test_hex_to_rgba(self, dashboard: ModuleType):
+        assert dashboard.hex_to_rgba("#1f77b4") == [31, 119, 180, dashboard.DOT_ALPHA]
+        assert dashboard.hex_to_rgba("#000000", alpha=10) == [0, 0, 0, 10]
+
+    def test_every_palette_colour_converts(self, dashboard: ModuleType):
+        for colour in dashboard.COLORS.values():
+            rgba = dashboard.hex_to_rgba(colour)
+            assert len(rgba) == 4
+            assert all(0 <= channel <= 255 for channel in rgba)
+
+    def test_unknown_label_gets_the_neutral_colour(self, dashboard: ModuleType):
+        assert dashboard.color_for("Something new") == dashboard.DEFAULT_COLOR
+
+
+class TestLegend:
+    def test_known_labels_in_palette_order_then_unknown(self, dashboard: ModuleType):
+        text = dashboard.legend_markdown(
+            ["Not assessed", "Zzz", "Physician", "Advanced Practice Provider"]
+        )
+        order = [
+            text.index(label)
+            for label in ("Physician", "Advanced Practice Provider", "Not assessed", "Zzz")
+        ]
+        assert order == sorted(order)
+
+    def test_labels_are_html_escaped(self, dashboard: ModuleType):
+        text = dashboard.legend_markdown(["<script>alert(1)</script>"])
+        assert "<script>" not in text
+        assert "&lt;script&gt;" in text
+
+
 class TestSelectedLocationIds:
-    def test_reads_ids_from_clicked_points(self, dashboard: ModuleType):
+    def test_reads_ids_from_clicked_dots(self, dashboard: ModuleType):
         event = SimpleNamespace(
-            selection=SimpleNamespace(points=[{"customdata": [4]}, {"customdata": [9]}])
+            selection=SimpleNamespace(
+                objects={"locations": [{"location_id": 4}, {"location_id": 9}]}
+            )
         )
         assert dashboard.selected_location_ids(event) == [4, 9]
 
-    @pytest.mark.parametrize("event", [None, SimpleNamespace(selection=SimpleNamespace(points=[]))])
+    @pytest.mark.parametrize(
+        "event",
+        [None, SimpleNamespace(selection=SimpleNamespace(objects={}))],
+    )
     def test_nothing_selected(self, dashboard: ModuleType, event):
         assert dashboard.selected_location_ids(event) == []
 
-
-def _decode(values: object) -> np.ndarray:
-    """Plotly ships numpy arrays base64-encoded as ``{"dtype", "bdata"[, "shape"]}``."""
-    if isinstance(values, dict) and "bdata" in values:
-        raw = np.frombuffer(base64.b64decode(values["bdata"]), dtype=np.dtype(values["dtype"]))
-        return raw.reshape(values["shape"]) if "shape" in values else raw
-    return np.asarray(values)
+    def test_other_layers_are_ignored(self, dashboard: ModuleType):
+        event = SimpleNamespace(
+            selection=SimpleNamespace(objects={"another-layer": [{"location_id": 1}]})
+        )
+        assert dashboard.selected_location_ids(event) == []
 
 
-def test_map_markers_carry_their_location_id_first(app: AppTest):
-    """Click-to-list reads ``customdata[0]``; Plotly must keep ``custom_data`` ahead of hover fields."""
-    spec = json.loads(app.get("plotly_chart")[0].proto.spec)
-    ids = np.concatenate(
-        [_decode(t["customdata"]).reshape(len(_decode(t["lat"])), -1)[:, 0] for t in spec["data"]]
-    )
-    assert sorted(ids.astype(int).tolist()) == [0, 1]  # one marker per distinct mapped point
+def test_map_layer_sizes_dots_in_metres_with_pixel_limits(app: AppTest):
+    """Dots grow with zoom because the radius is in metres, clamped to a pixel range."""
+    deck = json.loads(app.get("deck_gl_json_chart")[0].proto.json)
+    (layer,) = deck["layers"]
+    assert layer["@@type"] == "ScatterplotLayer"
+    assert layer["id"] == "locations"
+    assert layer["pickable"] is True
+    assert layer["radiusMinPixels"] < layer["radiusMaxPixels"]
+    # pydeck would turn radius_units into a JS expression; the metres default must be left alone.
+    assert "radiusUnits" not in layer
+
+    rows = layer["data"]
+    assert len(rows) == 2  # two distinct mapped points; the unmappable row is not drawn
+    assert sorted(r["location_id"] for r in rows) == [0, 1]
+    assert all(len(r["color"]) == 4 and r["radius_m"] > 0 for r in rows)
 
 
 def test_deploy_requirements_are_pinned_like_the_dashboard_extra():

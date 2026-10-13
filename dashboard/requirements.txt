@@ -2,5 +2,6 @@
 # the `dashboard` extra in pyproject.toml (tests/test_dashboard_app.py checks this).
 streamlit==1.65.0
 plotly==7.1.0
+pydeck==0.9.3
 pandas==2.3.3
 pyarrow==25.0.1

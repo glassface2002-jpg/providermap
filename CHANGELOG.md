@@ -9,6 +9,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Map dots scale with zoom.** The dashboard's location map now uses deck.gl
+  (`st.pydeck_chart`) instead of Plotly markers: dot radius is in real-world
+  metres (area proportional to provider count) clamped between 4 and 24 px, so
+  dots stay visible zoomed out, grow smoothly as you zoom in, and stop at a cap.
+  The old sizing scaled against the largest site and drew 96% of locations at
+  4 px or less. Includes a hand-made colour legend and a `pydeck` pin.
+- **State codes are normalised** when the map snapshot is built (the AdventHealth
+  directory contains typos such as `Fl`, `fL`, `Co`, which split a state into
+  several entries in the filter).
 - **Map dashboard** (`dashboard/app.py`) and **`providermap build-map-data`**.
   `build-map-data` geocodes one or more `providers.xlsx` exports through the
   US Census batch geocoder (`providermap/geocode.py`: deduplicated by
