@@ -182,8 +182,8 @@ def _build_hospital_index(data: dict[str, object]) -> WikidataHospitalIndex:
         if not website:
             continue
 
-        keys = {normalize_org_name(label) for label in (label, alt) if label}
-        keys.discard(None)
+        normalized = {normalize_org_name(name) for name in (label, alt) if name}
+        keys = {key for key in normalized if key is not None}
         if not keys:
             continue
 
