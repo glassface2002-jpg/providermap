@@ -95,7 +95,9 @@ class TestBuildHospitalIndex:
         data = {
             "results": {
                 "bindings": [
-                    _full_binding("Banner Desert Medical Center", "https://bannerhealth.com/desert"),
+                    _full_binding(
+                        "Banner Desert Medical Center", "https://bannerhealth.com/desert"
+                    ),
                 ]
             }
         }
@@ -130,8 +132,12 @@ class TestBuildHospitalIndex:
         data = {
             "results": {
                 "bindings": [
-                    _full_binding("Holy Cross Hospital", "https://holycrossaz.example", state="Arizona"),
-                    _full_binding("Holy Cross Hospital", "https://holycrossfl.example", state="Florida"),
+                    _full_binding(
+                        "Holy Cross Hospital", "https://holycrossaz.example", state="Arizona"
+                    ),
+                    _full_binding(
+                        "Holy Cross Hospital", "https://holycrossfl.example", state="Florida"
+                    ),
                 ]
             }
         }
@@ -150,8 +156,12 @@ class TestBuildHospitalIndex:
         data = {
             "results": {
                 "bindings": [
-                    _full_binding("Mercy Hospital Iowa City", "https://a.example", alt="Mercy Hospital"),
-                    _full_binding("Mercy Hospital Joplin", "https://b.example", alt="Mercy Hospital"),
+                    _full_binding(
+                        "Mercy Hospital Iowa City", "https://a.example", alt="Mercy Hospital"
+                    ),
+                    _full_binding(
+                        "Mercy Hospital Joplin", "https://b.example", alt="Mercy Hospital"
+                    ),
                 ]
             }
         }
@@ -167,7 +177,9 @@ class TestBuildHospitalIndex:
         data = {
             "results": {
                 "bindings": [
-                    _full_binding("Test Hospital", "https://test.example", state="Georgia (U.S. state)"),
+                    _full_binding(
+                        "Test Hospital", "https://test.example", state="Georgia (U.S. state)"
+                    ),
                 ]
             }
         }
@@ -181,6 +193,12 @@ class TestBuildHospitalIndex:
 
     def test_malformed_shape_returns_empty_index_not_an_exception(self) -> None:
         assert _build_hospital_index({"results": "not a dict"}) == WikidataHospitalIndex()
-        assert _build_hospital_index({"results": {"bindings": "not a list"}}) == WikidataHospitalIndex()
-        assert _build_hospital_index({"results": {"bindings": ["not a dict"]}}) == WikidataHospitalIndex()
+        assert (
+            _build_hospital_index({"results": {"bindings": "not a list"}})
+            == WikidataHospitalIndex()
+        )
+        assert (
+            _build_hospital_index({"results": {"bindings": ["not a dict"]}})
+            == WikidataHospitalIndex()
+        )
         assert _build_hospital_index({}) == WikidataHospitalIndex()
