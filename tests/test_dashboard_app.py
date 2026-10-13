@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
 import re
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -263,3 +264,16 @@ def test_deploy_requirements_are_pinned_like_the_dashboard_extra():
     }
     assert deployed
     assert deployed <= extra
+
+
+def test_a_rebuilt_snapshot_is_not_hidden_by_the_cache(app: AppTest, tmp_path: Path, monkeypatch):
+    """A running server must pick up new data even though the app code did not change."""
+    assert _metrics(app)["Providers"] == "4"
+
+    write_snapshot(pd.DataFrame([_row()], columns=SNAPSHOT_COLUMNS), tmp_path)
+    bumped = (tmp_path / "providers.parquet").stat().st_mtime_ns + 5_000_000_000
+    os.utime(tmp_path / "providers.parquet", ns=(bumped, bumped))
+
+    refreshed = AppTest.from_file(APP, default_timeout=60).run()
+    assert not refreshed.exception
+    assert _metrics(refreshed)["Providers"] == "1"

@@ -45,6 +45,7 @@ TABLE_COLUMNS = [
     "npi",
     "site_confidence",
 ]
+SNAPSHOT_FILES = ("providers.parquet", "build_info.json")
 MAP_STYLE = "carto-positron"  # density view; the location map uses pydeck's matching "light"
 LAYER_ID = "locations"
 DEFAULT_COLOR = COLORS[NOT_ASSESSED]
@@ -59,10 +60,18 @@ MAX_RADIUS_PX = 24
 
 
 @st.cache_data
-def load_snapshot() -> tuple[pd.DataFrame, dict]:
-    df = pd.read_parquet(DATA_DIR / "providers.parquet")
-    info = json.loads((DATA_DIR / "build_info.json").read_text(encoding="utf-8"))
+def _read_snapshot(directory: str, modified_ns: int) -> tuple[pd.DataFrame, dict]:
+    # `modified_ns` is only a cache key: a new snapshot in the same place must not be
+    # hidden by an older cached copy in a server that is still running.
+    folder = Path(directory)
+    df = pd.read_parquet(folder / "providers.parquet")
+    info = json.loads((folder / "build_info.json").read_text(encoding="utf-8"))
     return df, info
+
+
+def load_snapshot() -> tuple[pd.DataFrame, dict]:
+    newest = max((DATA_DIR / name).stat().st_mtime_ns for name in SNAPSHOT_FILES)
+    return _read_snapshot(str(DATA_DIR), newest)
 
 
 def sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
@@ -331,7 +340,7 @@ def find_tab(df: pd.DataFrame) -> None:
 
 def quality_tab(info: dict) -> None:
     st.write(
-        f"Snapshot built {info['built_at'][:10]} from {info['total_providers']:,} provider records."
+        f"Snapshot built {info['built_at'][:16].replace('T', ' ')} UTC from {info['total_providers']:,} provider records."
     )
     rows = [
         {
