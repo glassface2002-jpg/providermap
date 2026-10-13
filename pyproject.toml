@@ -46,6 +46,17 @@ render = [
     "playwright==1.61.0",
 ]
 
+# Map dashboard: `providermap build-map-data` (geocoding + snapshot) and
+# `streamlit run dashboard/app.py`. Kept out of the core dependencies - the
+# scraping pipeline itself needs none of these.
+dashboard = [
+    "zipcodes==3.0.0",
+    "pandas==2.3.3",
+    "pyarrow==25.0.1",
+    "streamlit==1.65.0",
+    "plotly==7.1.0",
+]
+
 [project.scripts]
 providermap = "providermap.cli:main"
 
@@ -105,7 +116,7 @@ disallow_untyped_defs = false  # aspirational; not yet enforced project-wide
 exclude = ["adapters/providers/adventhealth/fixtures\\.py", "tests/"]
 
 [[tool.mypy.overrides]]
-module = ["selectolax.*", "openpyxl.*", "playwright.*"]
+module = ["selectolax.*", "openpyxl.*", "playwright.*", "zipcodes.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
