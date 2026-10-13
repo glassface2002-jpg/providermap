@@ -25,6 +25,8 @@ exports/output/
 # Information) - large, third-party, and refreshed independently of this
 # repo. See organizations.cms_hospitals_csv_path in config.example.yaml.
 data/
+# ...except the committed dashboard snapshot (built by `providermap build-map-data`).
+!dashboard/data/
 
 # Logs
 logs/*.log

@@ -107,7 +107,7 @@ def exports(db: Database, tmp_path: Path) -> dict[str, Path]:
         ri = _export(ri_db, tmp_path / "ri.xlsx", [_sparse()])
     finally:
         ri_db.close()
-    return {"AdventHealth (FL)": fl, "Rhode Island": ri}
+    return {"AdventHealth": fl, "Rhode Island": ri}
 
 
 class TestLoadExport:
@@ -134,7 +134,7 @@ class TestBuildSnapshot:
     def test_combines_datasets_and_adds_coordinates(self, exports):
         df = build_snapshot(exports, fake_geocoder)
         assert list(df.columns) == SNAPSHOT_COLUMNS
-        assert df["dataset"].tolist() == ["AdventHealth (FL)", "AdventHealth (FL)", "Rhode Island"]
+        assert df["dataset"].tolist() == ["AdventHealth", "AdventHealth", "Rhode Island"]
 
         by_name = df.set_index("name")
         menezes = by_name.loc["Justin Menezes, MD"]
@@ -173,7 +173,7 @@ class TestWriteSnapshot:
 
         info = json.loads((out / "build_info.json").read_text())
         assert info["total_providers"] == 3
-        assert info["datasets"]["AdventHealth (FL)"] == {
+        assert info["datasets"]["AdventHealth"] == {
             "providers": 2,
             "geocode_precision": {"address": 1, "zip": 0, "none": 1},
         }
