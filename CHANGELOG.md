@@ -9,6 +9,17 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Map dashboard** (`dashboard/app.py`) and **`providermap build-map-data`**.
+  `build-map-data` geocodes one or more `providers.xlsx` exports through the
+  US Census batch geocoder (`providermap/geocode.py`: deduplicated by
+  address, resumable CSV cache, ZIP-centre fallback labelled
+  `precision="zip"`) and writes a committed Parquet snapshot plus
+  `build_info.json` (`providermap/map_data.py`). The Streamlit dashboard reads
+  only that snapshot: filters, KPI tiles, a location/density map with
+  click-to-list, insight charts, provider search, and a Data quality tab.
+  New optional `dashboard` extra; CI now installs it so the tests can import
+  their dependencies. Fields a run never collected are labelled
+  `Not assessed` / `Unknown` rather than left blank.
 - **`providermap export-organizations`** - a fourth workbook,
   `organizations.xlsx`, alongside the three `providermap export` already
   writes. One row per organization plus a linked-provider count (from

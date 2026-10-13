@@ -38,6 +38,9 @@ code in it (see [Architecture](#architecture)).
   dataset exercises the entire pipeline with zero network access.
 - **Typed throughout** — dataclass models instead of untyped dicts, a clean
   mypy pass, Black + Ruff enforced in CI.
+- **Map dashboard** — a Streamlit app that plots geocoded providers on an
+  interactive map, with filters, charts, and a data-quality tab; see
+  [Map dashboard](#map-dashboard).
 - **Organizations** — a parallel `OrganizationAdapter` track auto-fetches
   CMS's public hospital dataset (no manual download) into a
   `provider → organization → location` model, enriches websites from
@@ -371,6 +374,40 @@ providermap query "Menezes"
 
 ---
 
+## Map dashboard
+
+`dashboard/app.py` is a [Streamlit](https://streamlit.io) app that shows
+providers on an interactive map: filter by dataset, state, specialty, provider
+type, and site confidence; switch between a location map and a density view;
+click markers to list the providers there; and read a Data quality tab that
+says how precisely each dataset was placed.
+
+```bash
+pip install -e ".[dashboard]"
+
+# 1. Geocode one or more providers.xlsx exports into the dashboard's snapshot
+providermap build-map-data \
+    --input "AdventHealth=exports/output/providers.xlsx" \
+    --input "Another run=path/to/other_providers.xlsx"
+
+# 2. Run the app
+streamlit run dashboard/app.py
+```
+
+`build-map-data` geocodes with the free US Census batch geocoder (no API key).
+Addresses it cannot match at street level fall back to the centre of their ZIP
+code and are labelled as such; addresses with no usable ZIP are kept in the
+counts but left off the map. Answers are cached in `.cache/geocode.csv`, so a
+rerun only sends addresses it has not seen. The output is two small files,
+`dashboard/data/providers.parquet` and `build_info.json`, which are committed:
+the app reads only those, so it needs neither the pipeline nor the database.
+
+To publish it, create a free app at [share.streamlit.io](https://share.streamlit.io)
+pointing at this repository with `dashboard/app.py` as the main file; it
+installs `dashboard/requirements.txt` automatically.
+
+---
+
 ## Troubleshooting
 
 **"STOP: set a real contact address in config.yaml"** — the pipeline refuses
@@ -462,6 +499,8 @@ providermap/
 │   ├── validator.py                classification + validation rules
 │   ├── database.py                  SQLite schema, migrations, dedupe
 │   ├── exporter.py                   Excel export
+│   ├── geocode.py                    Census batch geocoder + ZIP fallback + cache
+│   ├── map_data.py                   builds the dashboard's geocoded snapshot
 │   ├── discover.py                    site analysis / investigation
 │   ├── parser_utils.py                 generic parsing (NPI checksum, vCard,
 │   │                                     JSON-LD, ...)
@@ -478,6 +517,10 @@ providermap/
 │   └── organizations/        organization adapters (see ROADMAP.md)
 │       ├── base.py             OrganizationAdapter interface
 │       └── cms_hospitals/      first concrete adapter (CMS hospital dataset)
+├── dashboard/               Streamlit map dashboard (reads data/ only)
+│   ├── app.py
+│   ├── requirements.txt       what Streamlit Cloud installs
+│   └── data/                  committed snapshot (providers.parquet, build_info.json)
 ├── tests/                   pytest suite, fully offline
 ├── database/  logs/  exports/output/    (gitignored - generated at runtime)
 ├── config.example.yaml
