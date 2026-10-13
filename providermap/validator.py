@@ -278,7 +278,7 @@ def validate_provider(
     if not provider.city or not provider.state:
         problems.append("Incomplete address (missing city or state)")
 
-    if not provider.profile_url:
+    if policy.require_profile_url and not provider.profile_url:
         problems.append("No profile URL")
 
     substantive = [provider.full_name, provider.address, provider.specialty, provider.practice_name]

@@ -224,6 +224,105 @@ class TestLocations:
         assert db.counts()["locations"] == 1
 
 
+class TestLinkEnrichOnly:
+    """``Database.link(..., enrich_only=True)`` - added for Phase E
+    (Cigna FHIR national discovery) after the validation framework
+    surfaced a real gap: a source whose own discovery can be scope-limited
+    (state_scoped vs. national) could flip ``provider_locations.is_primary``
+    for an already-known provider out from under whatever source seeded it
+    first, even though ``providers.address`` stays protected by the
+    caller's own enrichment-only convention. See ``Database.link()``'s
+    docstring and ``tests/test_cigna_fhir_validation.py``'s
+    ``TestV6EnrichmentOnlyPreserved`` for the end-to-end version of this.
+    """
+
+    def _provider_with_location(self, db: Database, state: str) -> tuple[int, int]:
+        provider_id, _ = db.upsert_provider(_provider(npi=f"npi-{state}", profile_url=None))
+        location_id = db.upsert_location(
+            Location(
+                address=f"1 {state} St",
+                city=state,
+                state=state,
+                zip="00000",
+                address_key=f"1 {state.lower()} st|{state}|00000",
+            )
+        )
+        assert provider_id is not None
+        assert location_id is not None
+        return provider_id, location_id
+
+    def _is_primary(self, db: Database, provider_id: int, location_id: int) -> int:
+        row = db.conn.execute(
+            "SELECT is_primary FROM provider_locations WHERE provider_id=? AND location_id=?",
+            (provider_id, location_id),
+        ).fetchone()
+        assert row is not None
+        result: int = row["is_primary"]
+        return result
+
+    def test_default_behavior_is_unchanged(self, db: Database) -> None:
+        """No ``enrich_only`` argument at all - existing callers (e.g.
+        ``pipeline.py``) must see byte-identical behavior: a later call
+        for the same pair can still flip ``is_primary``, exactly as
+        before this parameter existed."""
+        provider_id, loc_a = self._provider_with_location(db, "FL")
+        db.link(provider_id, loc_a, is_primary=True)
+        assert self._is_primary(db, provider_id, loc_a) == 1
+
+        db.link(provider_id, loc_a, is_primary=False)
+        assert self._is_primary(db, provider_id, loc_a) == 0
+
+    def test_enrich_only_does_not_touch_an_existing_relationships_primary_flag(
+        self, db: Database
+    ) -> None:
+        provider_id, loc_a = self._provider_with_location(db, "FL")
+        db.link(provider_id, loc_a, is_primary=True, enrich_only=True)
+
+        db.link(provider_id, loc_a, is_primary=False, enrich_only=True)
+        assert self._is_primary(db, provider_id, loc_a) == 1, (
+            "enrich_only must never re-litigate an already-recorded "
+            "relationship's is_primary flag, regardless of what a later "
+            "call asks for."
+        )
+
+    def test_enrich_only_demotes_a_new_relationships_primary_claim_if_one_exists(
+        self, db: Database
+    ) -> None:
+        provider_id, loc_a = self._provider_with_location(db, "FL")
+        db.link(provider_id, loc_a, is_primary=True, enrich_only=True)
+
+        loc_b = db.upsert_location(
+            Location(
+                address="2 GA St",
+                city="GA",
+                state="GA",
+                zip="00000",
+                address_key="2 ga st|GA|00000",
+            )
+        )
+        assert loc_b is not None
+        db.link(provider_id, loc_b, is_primary=True, enrich_only=True)
+
+        assert self._is_primary(db, provider_id, loc_a) == 1
+        assert self._is_primary(db, provider_id, loc_b) == 0, (
+            "a brand-new relationship must not be allowed to claim "
+            "is_primary=True when the provider already has a different "
+            "primary location - it must be recorded as a secondary "
+            "location instead of contested or dropped."
+        )
+
+    def test_enrich_only_still_allows_the_first_relationship_to_be_primary(
+        self, db: Database
+    ) -> None:
+        """A provider with no relationships yet must still get a primary
+        location on its first link, even under enrich_only - this fix
+        only blocks *re*-litigating a decision, not making the initial
+        one."""
+        provider_id, loc_a = self._provider_with_location(db, "FL")
+        db.link(provider_id, loc_a, is_primary=True, enrich_only=True)
+        assert self._is_primary(db, provider_id, loc_a) == 1
+
+
 class TestExclusions:
     def test_exclude_then_reexclude_updates_not_duplicates(self, db: Database) -> None:
         rec = ExcludedRecord(

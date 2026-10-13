@@ -1,0 +1,12 @@
+﻿python : <repo>\providermap\cli.py:50: DeprecationWarning: 
+'asyncio.WindowsSelectorEventLoopPolicy' is deprecated and slated for removal in Python 3.16
+At line:1 char:369
++ ... ap-github"; python -m providermap.cli --config config.staging_phase_d ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (<repo>... in Python 3.16:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+<repo>\providermap\cli.py:50: DeprecationWarning: 
+'asyncio.set_event_loop_policy' is deprecated and slated for removal in Python 3.16
+  asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

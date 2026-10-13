@@ -102,6 +102,24 @@ def _distinctive_tokens(name: str | None) -> list[str]:
     ]
 
 
+def page_matches_organization(html: str, org_name: str | None) -> bool:
+    """Does ``html`` (already-fetched page content) contain at least one
+    distinctive token from ``org_name``?
+
+    Deliberately named for exactly what it checks - not
+    "page_verifies_organization" or similar - this is one piece of
+    corroborating evidence, not proof. A hospital's real, correct site can
+    legitimately fail this check (a renamed facility, a health-system
+    landing page, a JS-rendered shell, a redirect target) - callers should
+    use the result to choose a confidence tier, not to reject an otherwise
+    reachable candidate. Shared by every source that reachability-checks a
+    bulk-dataset candidate (HIFLD/VA/OSM) and by :func:`discover_website`'s
+    own guessing fallback, so this tokenize-and-match rule is defined once.
+    """
+    tokens = _distinctive_tokens(org_name)
+    return any(tok in html.lower() for tok in tokens)
+
+
 async def discover_website(
     org: Organization,
     checker: DomainChecker,
@@ -117,7 +135,6 @@ async def discover_website(
         return None, None
 
     limiter = RateLimiter(requests_per_second)
-    distinctive = _distinctive_tokens(org.name)
 
     for domain in candidates:
         await limiter.wait()
@@ -125,7 +142,7 @@ async def discover_website(
         html = await checker(url)
         if html is None:
             continue
-        matched = any(tok in html.lower() for tok in distinctive)
+        matched = page_matches_organization(html, org.name)
         return url, (Confidence.MEDIUM if matched else Confidence.LOW)
 
     return None, None

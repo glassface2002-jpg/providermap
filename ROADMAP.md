@@ -151,3 +151,49 @@ providermap/
 ├── website_enrichment.py    best-effort website discovery - stage 4 ✓
 └── organization_linking.py  exact-match provider<->org linking - stage 5 ✓
 ```
+
+## Provider dataset adapters
+
+A third adapter family, alongside `SiteAdapter` and `OrganizationAdapter`:
+`adapters.providers.base_dataset.ProviderDatasetAdapter` (registry:
+`PROVIDER_DATASET_ADAPTERS`), for *provider* sources that are a structured
+dataset/API rather than a website to scrape — the same "different shape for
+a different kind of source" reasoning stage 3 already applied on the
+organization side.
+
+`adapters/providers/cigna_fhir/` is the first concrete instance: Cigna's
+public FHIR R4 Provider Directory (Da Vinci PDex Plan-Net, mandated under
+CMS-9115-F). Built and hardened in stages, each measured against the live
+API rather than assumed:
+
+- **State-scoped discovery** *(shipped)* — `Location?address-state=X` →
+  batched `PractitionerRole?location=`, with checkpoint/resume and bounded
+  concurrency. Verified end-to-end in staging: correct inserts/updates,
+  enrichment-only behavior (an existing NPI is never overwritten), idempotent
+  relationship linking.
+- **National discovery mode** *(built and offline-tested, rejected for
+  production use — see `adapters/providers/cigna_fhir/NATIONAL_DISCOVERY_DESIGN.md`'s
+  status notice and `docs/adr/0002-close-alternate-discovery-traversals.md`,
+  which supersedes `docs/adr/0001-national-discovery-strategy.md`)* — an
+  unscoped `PractitionerRole` traversal (`NationalDiscovery` +
+  `ResourceSpool`, opt-in via `cigna_fhir_discovery_mode: "national"`) was
+  designed, approved, and built to avoid state-scoped's per-location
+  enumeration cost, passing all offline validation (V1-V13) against
+  synthetic fixtures. A later live validation at real pagination scale
+  against the real Cigna API (the full Rhode Island universe, walked end to
+  end) reversed the finding the design rested on: 33 pages silently returned
+  `total:0`, losing 228 role-bearing locations and 831 role ids with no
+  error signal — a defect no offline fixture test could surface. That
+  defect, on top of OR-list batching and alternate anchors already ruled
+  out, closed every investigated alternative. **Per-location state-scoped
+  discovery is the correct and only production discovery architecture** for
+  this adapter; the national-mode code remains in the repo, opt-in, but
+  must never be selected against the real API. Remaining work targets making
+  state-scoped production-ready (streaming/memory, checkpoint tuning), not a
+  new traversal.
+
+See `docs/adr/` for the durable decision record this work produced, and
+`adapters/providers/cigna_fhir/evidence/` for the measured numbers (Rhode
+Island and Florida staging runs, and the live FHIR capability probes,
+including the production-scale probe that closed national discovery) that
+drove it.

@@ -10,16 +10,28 @@ dist/
 # Local configuration - contains a real contact email, never the example.
 config.yaml
 .env
+# Same real-email concern - one-off staging/pilot configs copied from
+# config.example.yaml for a specific live run (see database/, below, for
+# why their outputs are excluded too).
+config.staging*.yaml
 
 # Data. The whole point of this repo is the pipeline that produces these,
 # not the outputs of any one person's run - none of it belongs in git.
-database/*.db
-database/*.db-wal
-database/*.db-shm
+# Broad on purpose (not just database/*.db) so a timestamped backup file
+# like database/providermap.db.backup-<ts> is never missed just because its
+# suffix isn't literally ".db".
+database/
+*.db
+*.db-*
+*.db.backup*
+*.sqlite
+*.sqlite3
 .cache/
 
 # Generated exports
 exports/output/
+# Same as above - a specific staging/pilot run's real ingested output.
+exports/output_staging*/
 
 # Manually-downloaded organization datasets (e.g. CMS Hospital General
 # Information) - large, third-party, and refreshed independently of this
@@ -44,3 +56,6 @@ Thumbs.db
 .ruff_cache/
 htmlcov/
 .coverage
+
+# One-off local run/monitor scripts (machine-specific paths)
+run_*_monitor.ps1

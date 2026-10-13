@@ -20,9 +20,11 @@ from pathlib import Path
 from adapters import (
     ADAPTERS,
     ORGANIZATION_ADAPTERS,
+    PROVIDER_DATASET_ADAPTERS,
     SiteAdapter,
     get_adapter_class,
     get_organization_adapter_class,
+    get_provider_dataset_adapter_class,
 )
 
 from . import discover as discovery
@@ -268,6 +270,32 @@ def cmd_build_map_data(config: Config, args: argparse.Namespace) -> None:
     print()
 
 
+def cmd_refresh_osm_cache(config: Config, args: argparse.Namespace) -> None:
+    """Rebuild the local OSM hospital cache ``enrich-organizations`` reads
+    (see ``providermap/osm_hospitals.py``). Heavy and explicit - downloads a
+    ~12GB Geofabrik US extract (unless ``--pbf-path`` points at one already
+    on disk) and streams through it once. Never run automatically by
+    ``enrich-organizations`` itself; re-run this periodically (weeks/months)
+    to pick up OSM's ongoing edits.
+    """
+    from .osm_hospitals import refresh_osm_cache
+
+    if not config.organizations.osm_cache_path:
+        print(
+            "\nSTOP: set organizations.osm_cache_path in config.yaml first "
+            "(where the built cache should be written).\n"
+        )
+        return
+
+    pbf_path = args.pbf_path or str(Path(config.organizations.osm_cache_path).with_suffix(".pbf"))
+    print(f"\nDownloading/parsing {config.organizations.osm_pbf_url} -> {pbf_path}")
+    print("(this can take a while - a ~12GB one-time/periodic download, not a per-run cost)\n")
+    count = refresh_osm_cache(
+        config.organizations.osm_pbf_url, config.organizations.osm_cache_path, pbf_path
+    )
+    print(f"Wrote {count} hospital records to {config.organizations.osm_cache_path}\n")
+
+
 def cmd_status(config: Config, args: argparse.Namespace) -> None:
     db = Database(db_path(config, args.test))
     c = db.counts()
@@ -504,6 +532,291 @@ def cmd_ingest_organizations(config: Config, args: argparse.Namespace) -> None:
     db.close()
 
 
+def cmd_ingest_providers(config: Config, args: argparse.Namespace) -> None:
+    """Import one provider *dataset/API* source (e.g. Cigna's FHIR Provider
+    Directory) into ``providers``/``locations``/``organizations`` - the
+    counterpart to ``ingest-organizations``, but for provider-shaped sources
+    (see ``adapters/providers/base_dataset.py``).
+
+    Every write goes through the same ``Database`` methods the scraped
+    AdventHealth pipeline uses (NPI-first dedupe via ``upsert_provider``,
+    ``upsert_location``, ``link``, ``upsert_organization``,
+    ``link_provider_organization``) - nothing here is a new persistence path.
+
+    Cigna enriches, it does not overwrite: a practitioner whose NPI already
+    exists in ``providers`` (from AdventHealth or a prior Cigna run) is left
+    exactly as-is - only the new location/organization *relationships* Cigna
+    reveals are added. Only a genuinely new NPI gets a full
+    ``upsert_provider`` insert. This is deliberately different from
+    ``cmd_ingest_organizations``, which always calls ``upsert_organization``
+    (organizations have no content-hash/"don't overwrite" concept yet) - see
+    the plan file for why providers and organizations differ here.
+    """
+    from dataclasses import replace
+
+    from .checkpoint import CheckpointStore
+    from .validator import validate_provider
+
+    # Per-run override, e.g. `--discovery-mode national` for a deliberate
+    # one-off national pass without editing config.yaml - config.py's
+    # documented migration discipline still applies: the *default* (when
+    # this flag is omitted) stays whatever config.yaml says, itself
+    # state_scoped unless someone has already made that separate, reviewed
+    # decision.
+    if getattr(args, "discovery_mode", None):
+        config.providers.cigna_fhir_discovery_mode = args.discovery_mode
+
+    adapter_cls = get_provider_dataset_adapter_class(args.provider_adapter)
+    # None (the default) disables checkpointing entirely - existing behavior,
+    # unchanged. Set providers.checkpoint_path before a run expected to take
+    # hours, so it can survive an interruption without re-fetching everything.
+    checkpoint_store = (
+        CheckpointStore(
+            config.providers.checkpoint_path,
+            commit_every=config.providers.checkpoint_commit_every,
+        )
+        if config.providers.checkpoint_path
+        else None
+    )
+    adapter = adapter_cls(config, checkpoint_store=checkpoint_store)
+
+    # Same NpiPolicy the scraped-website pipeline uses, except for
+    # require_profile_url: a provider dataset source identifies practitioners
+    # by NPI/FHIR id, not a profile page, so its adapters declare that they
+    # don't have one (see ProviderDatasetAdapter.requires_profile_url) rather
+    # than this call site or the validator special-casing "dataset sources".
+    npi_policy = replace(config.npi, require_profile_url=adapter.requires_profile_url)
+
+    db = Database(db_path(config, False), dry_run=args.dry_run)
+    log = logging.getLogger(__name__)
+
+    # Same runs-table lifecycle every other command uses (start_run/
+    # finish_run) - so `providermap status`/`changes` see dataset-adapter
+    # runs the same way they see scrape/discover/trial runs, without
+    # database.py needing to know "ingest-providers" exists.
+    db.start_run(mode="dry-run" if args.dry_run else "ingest-providers", source_used=adapter.name)
+
+    tally = {
+        "practitioners_discovered": 0,
+        "new_npis": 0,
+        "existing_npis": 0,
+        "excluded": 0,
+        "errors": 0,
+    }
+    seen_location_keys: set[str | None] = set()
+    seen_org_keys: set[tuple[str | None, str | None]] = set()
+    started_at = datetime.now(timezone.utc)
+
+    # A discovery-level failure (e.g. the location enumeration hitting a
+    # persistent total:0 silent-failure page on a fresh walk) must still
+    # reach finish_run and the summary below - a run row left with
+    # finished_at NULL and no recorded outcome is how failures get lost.
+    # The failure is re-surfaced as a nonzero exit at the end instead.
+    fatal_error: Exception | None = None
+    try:
+        for raw in adapter.discover():
+            try:
+                normalized = adapter.normalize(adapter.extract(raw))
+            except Exception:
+                tally["errors"] += 1
+                log.exception("Failed to process one %s record", adapter.name)
+                continue
+
+            tally["practitioners_discovered"] += 1
+            provider = normalized.provider
+
+            is_valid, problems = validate_provider(provider, npi_policy)
+            if not is_valid:
+                tally["excluded"] += 1
+                log.info(
+                    "Excluding %s provider %s: %s",
+                    adapter.name,
+                    provider.npi or provider.full_name,
+                    "; ".join(problems),
+                )
+                continue
+
+            existing = db.get_provider(npi=provider.npi) if provider.npi else None
+            if existing is None:
+                provider_id, _ = db.upsert_provider(provider)
+                tally["new_npis"] += 1
+            else:
+                # Known NPI: leave the existing provider row untouched - Cigna
+                # only contributes the location/organization links below.
+                provider_id = existing.provider_id
+                tally["existing_npis"] += 1
+
+            for i, loc in enumerate(normalized.locations):
+                if loc.address_key not in seen_location_keys:
+                    seen_location_keys.add(loc.address_key)
+                location_id = db.upsert_location(loc)
+                if provider_id is not None and location_id is not None:
+                    # enrich_only=True: this source's own discovery may be
+                    # scope-limited (see CignaFhirAdapter's state_scoped vs
+                    # national modes) - a later, differently-scoped pass must
+                    # only ever add relationships, never re-litigate which
+                    # location is already primary (Risk R1, see
+                    # Database.link()'s docstring).
+                    db.link(provider_id, location_id, is_primary=(i == 0), enrich_only=True)
+
+            for org, _relationship in normalized.organizations:
+                org_key = (org.source, org.source_id)
+                if org_key not in seen_org_keys:
+                    seen_org_keys.add(org_key)
+                organization_id, _ = db.upsert_organization(org)
+                if provider_id is not None and organization_id is not None:
+                    db.link_provider_organization(
+                        provider_id, organization_id, source=adapter.source
+                    )
+    except Exception as exc:
+        fatal_error = exc
+        log.exception("Discovery aborted for %s - recording the partial run", adapter.name)
+
+    runtime_seconds = (datetime.now(timezone.utc) - started_at).total_seconds()
+    request_count = getattr(adapter, "last_request_count", None)
+    stats = getattr(adapter, "last_discovery_stats", None)
+
+    # Completeness verdict, shared by the runs-table notes, the printed
+    # summary, and the exit code below. A run is only "clean" when nothing
+    # failed AND no silent-failure signature survived retries - detected
+    # incompleteness that still exits 0 is how bad data reaches the
+    # canonical graph unnoticed (both release-gate RI runs carried total:0
+    # signatures and exited 0 before this existed).
+    silent_failure = bool(getattr(stats, "suspected_silent_failure", False))
+    failed_batch_count = len(getattr(stats, "failed_batches", []) or [])
+    stale_restarts = getattr(stats, "stale_cursor_restarts", 0)
+    run_failed = (
+        fatal_error is not None or tally["errors"] > 0 or failed_batch_count > 0 or silent_failure
+    )
+
+    # Reuses the existing generic runs columns rather than adding
+    # dataset-adapter-specific ones: urls_discovered/providers_new/
+    # providers_changed map onto practitioners discovered/new NPIs/existing
+    # NPIs, and whatever has no matching column (locations/organizations
+    # discovered, request count, completeness verdict) goes in notes - the
+    # same "no dedicated column, use notes" convention finish_run's other
+    # call sites already follow.
+    status_note = "INCOMPLETE" if run_failed else "ok"
+    db.finish_run(
+        urls_discovered=tally["practitioners_discovered"],
+        providers_new=tally["new_npis"],
+        providers_changed=tally["existing_npis"],
+        excluded=tally["excluded"],
+        errors=tally["errors"],
+        source_used=adapter.name,
+        notes=(
+            f"status={status_note} locations={len(seen_location_keys)} "
+            f"organizations={len(seen_org_keys)} requests={request_count} "
+            f"runtime={runtime_seconds:.1f}s failed_batches={failed_batch_count} "
+            f"silent_failure={silent_failure} stale_restarts={stale_restarts}"
+            + (f" aborted={type(fatal_error).__name__}" if fatal_error is not None else "")
+        )[:200],
+    )
+
+    banner = "DRY RUN - nothing was written" if args.dry_run else "Done"
+    print(f"\n{banner}. Source: {adapter.name} ({adapter.source})")
+    print(f"  practitioners discovered : {tally['practitioners_discovered']}")
+    print(f"  new NPIs                 : {tally['new_npis']}")
+    print(f"  existing NPIs            : {tally['existing_npis']}")
+    print(f"  locations discovered     : {len(seen_location_keys)}")
+    print(f"  organizations discovered : {len(seen_org_keys)}")
+    print(f"  excluded                 : {tally['excluded']}")
+    print(f"  errors                   : {tally['errors']}")
+    print(f"  runtime                  : {runtime_seconds:.1f}s")
+    if request_count is not None:
+        print(f"  API requests             : {request_count}")
+
+    # Optional, richer profiling breakdown - only adapters that opt in (see
+    # adapters/providers/cigna_fhir/adapter.py::DiscoveryStats) expose this;
+    # cli.py stays adapter-agnostic via getattr, same as last_request_count.
+    if stats is not None:
+        print("\n  --- request profile ---")
+        print(f"  requests by endpoint     : {dict(stats.requests_by_endpoint)}")
+        print(f"  continuation requests    : {stats.continuation_requests}")
+        print(f"  resources seen by type   : {dict(stats.resources_seen_by_type)}")
+        print(f"  duplicate resources      : {dict(stats.duplicate_resources_by_type)}")
+        print(f"  reference hits / misses  : {stats.reference_hits} / {stats.reference_misses}")
+        print(f"  retry count              : {stats.retry_count}")
+        avg = stats.average_latency_seconds
+        print(
+            f"  avg request latency      : {avg:.3f}s"
+            if avg is not None
+            else "  avg request latency      : n/a"
+        )
+        print(f"  discover() runtime       : {stats.runtime_seconds:.1f}s")
+        if stats.failed_batches:
+            print(
+                f"  failed batches           : {len(stats.failed_batches)} (see logs for details)"
+            )
+
+        # Correctness instrumentation - separate from the profiling numbers
+        # above, which are about cost. These are about whether the run's
+        # data can be trusted. See DiscoveryStats.suspected_silent_failure
+        # for why role_queries_empty being large is expected and NOT a
+        # failure signal, while total:0 or an abnormal enumeration ending
+        # is.
+        print("\n  --- discovery completeness ---")
+        if stats.location_enumeration_completed_normally is None:
+            enum_status = "not verified this run (checkpoint hit or unscoped mode)"
+        elif stats.location_enumeration_completed_normally:
+            enum_status = f"ended normally ({stats.location_enumeration_pages} pages)"
+        else:
+            enum_status = f"DID NOT END NORMALLY ({stats.location_enumeration_pages} pages)"
+        print(f"  location enumeration     : {enum_status}")
+        print(
+            f"  role queries             : {stats.role_queries_attempted} attempted, "
+            f"{stats.role_queries_empty} empty"
+        )
+        total_zero = dict(stats.bundles_with_total_zero_by_endpoint)
+        print(f"  bundles with total:0     : {total_zero if total_zero else 'none'}")
+        total_zero_retried = dict(getattr(stats, "total_zero_retries_by_endpoint", {}) or {})
+        if total_zero_retried:
+            print(f"  total:0 pages retried    : {total_zero_retried}")
+        if stale_restarts:
+            print(f"  stale cursor restarts    : {stale_restarts} (recovered cleanly)")
+        roles = stats.distinct_resources_by_type.get("PractitionerRole", 0)
+        print(
+            f"  distinct roles / providers / relationships : "
+            f"{roles} / {stats.providers_yielded} / "
+            f"{stats.provider_location_relationships_discovered}"
+        )
+        if stats.suspected_silent_failure:
+            print(
+                "  *** SILENT FAILURE SIGNATURE(S) DETECTED - this run's data may be incomplete ***"
+            )
+        else:
+            print("  no silent-failure signatures detected")
+
+    if args.dry_run:
+        print(f"\n  {db.pending_writes} write operation(s) were rolled back.")
+    print()
+    db.close()
+    if checkpoint_store is not None:
+        checkpoint_store.close()
+    # Only the "national" strategy's adapter exposes this (see
+    # CignaFhirAdapter.__init__) - getattr keeps this command adapter-
+    # agnostic, same convention as last_request_count/last_discovery_stats.
+    resource_spool = getattr(adapter, "resource_spool", None)
+    if resource_spool is not None:
+        resource_spool.close()
+
+    # Completion gating: a run with errors, failed batches, a surviving
+    # silent-failure signature, or an aborting exception exits nonzero so
+    # schedulers/orchestrators (and humans reading $?) cannot mistake
+    # incomplete data for success. The checkpoint side of the same gate
+    # lives in the discovery strategies (had_errors blocks mark_complete),
+    # so an incomplete run also stays resumable.
+    if run_failed:
+        print(
+            "*** RUN INCOMPLETE - exiting nonzero "
+            f"(errors={tally['errors']} failed_batches={failed_batch_count} "
+            f"silent_failure={silent_failure}"
+            + (f" aborted={type(fatal_error).__name__}" if fatal_error is not None else "")
+            + ") ***\n"
+        )
+        sys.exit(1)
+
+
 async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> None:
     """Website discovery for organizations that don't have one yet.
 
@@ -512,15 +825,47 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     confirmed data, reported as ``Confidence.HIGH``), then HIFLD's Hospitals
     dataset (``providermap/hifld_hospitals.py`` - HIFLD's own data is
     measurably stale, so every candidate is reachability-checked before
-    being trusted, and stored only as ``Confidence.MEDIUM``), then falls
-    back to a best-effort name-guess (``providermap/website_enrichment.py``
-    - never authoritative, never ``Confidence.HIGH``) for whatever's still
-    missing.
+    being trusted), then the VA Facilities API for VA-type organizations
+    (``providermap/va_facilities.py`` - same reachability-gated discipline
+    as HIFLD; skipped entirely if no ``organizations.va_api_key`` is
+    configured), then a local OpenStreetMap hospital cache
+    (``providermap/osm_hospitals.py`` - same reachability-gated discipline;
+    skipped entirely if no ``organizations.osm_cache_path`` is configured or
+    the cache file doesn't exist yet - see ``providermap refresh-osm-cache``),
+    then falls back to a best-effort name-guess
+    (``providermap/website_enrichment.py`` - never authoritative, never
+    ``Confidence.HIGH``) for whatever's still missing. HIFLD/VA/OSM/guessing
+    all use the same shared ``website_enrichment.page_matches_organization``
+    corroboration check on their already-fetched page content to choose
+    ``Confidence.MEDIUM`` (page mentions the org) vs ``Confidence.LOW`` (page
+    doesn't) - never HIGH, and never a rejection: a reachable candidate is
+    always stored regardless of whether the page happens to mention the
+    org's name (a renamed facility or health-system landing page can
+    legitimately fail that check and is still the right website).
+
+    Every candidate this cascade considers - not just the one it promotes -
+    is also logged to ``website_candidates`` (schema v8, see
+    ``Database.add_website_candidate``), including a HIFLD match that failed
+    its reachability check. This is purely an audit trail: it changes
+    nothing about which website ends up on ``organizations.website``, the
+    order sources are tried in, or any of the counters printed below - see
+    ROADMAP.md's Phase 5.3 notes.
+
+    Each source is tried against every key ``identity_resolution.
+    get_candidate_keys`` returns for an organization - its own normalized
+    name first, then its known HIGH-confidence aliases (schema v7/Phase 5.5)
+    - not just its own name, so an organization already known by an alias
+    (e.g. from the Wikidata alias backfill) can match a source whose own
+    data uses that name instead of CMS's. This changes nothing about
+    promotion, reachability, confidence, or candidate-logging behavior -
+    only which name(s) get tried before falling through to the next source.
     """
     from .hifld_hospitals import fetch_hifld_hospital_index
-    from .models import Confidence
-    from .parser_utils import normalize_org_name
-    from .website_enrichment import discover_website, http_domain_checker
+    from .identity_resolution import get_candidate_keys
+    from .models import Confidence, ResolutionMethod
+    from .osm_hospitals import fetch_osm_hospital_index
+    from .va_facilities import fetch_va_facility_index
+    from .website_enrichment import discover_website, http_domain_checker, page_matches_organization
     from .wikidata_hospitals import fetch_wikidata_hospital_websites
 
     older_than = (
@@ -537,6 +882,13 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     hifld_index = fetch_hifld_hospital_index(
         config.politeness.user_agent, config.organizations.hifld_fetch_timeout_seconds
     )
+    va_index = fetch_va_facility_index(
+        config.organizations.va_api_key,
+        config.organizations.va_facilities_base_url,
+        config.politeness.user_agent,
+        config.organizations.va_facilities_fetch_timeout_seconds,
+    )
+    osm_index = fetch_osm_hospital_index(config.organizations.osm_cache_path)
 
     async def checker(url: str) -> str | None:
         return await http_domain_checker(
@@ -551,24 +903,52 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     hifld_unreachable = 0
     hifld_stored = 0
     hifld_skipped = 0
+    hifld_medium = 0
+    hifld_low = 0
+    va_matched = 0
+    va_reachable = 0
+    va_unreachable = 0
+    va_stored = 0
+    va_skipped = 0
+    va_medium = 0
+    va_low = 0
+    osm_matched = 0
+    osm_reachable = 0
+    osm_unreachable = 0
+    osm_stored = 0
+    osm_skipped = 0
+    osm_medium = 0
+    osm_low = 0
     found_guess = 0
     for org in orgs:
         if org.organization_id is None:
             continue
 
-        key = org.normalized_name or normalize_org_name(org.name)
-        # State-keyed lookup first (disambiguates a name shared by hospitals
-        # in different states - see WikidataHospitalIndex), falling back to
-        # the plain name index for organizations whose state doesn't resolve
-        # to a Wikidata item.
+        candidate_keys = get_candidate_keys(org, db)
+        # Own name first, then HIGH-confidence aliases (see
+        # get_candidate_keys) - within each key, state-keyed lookup first
+        # (disambiguates a name shared by hospitals in different states -
+        # see WikidataHospitalIndex), falling back to the plain name index
+        # for organizations whose state doesn't resolve to a Wikidata item.
+        # Stops at the first hit across all keys.
         wiki_url = None
-        if key:
+        for candidate_key in candidate_keys:
             if org.state:
-                wiki_url = wikidata_index.by_name_state.get((key, org.state))
+                wiki_url = wikidata_index.by_name_state.get((candidate_key, org.state))
             if wiki_url is None:
-                wiki_url = wikidata_index.by_name.get(key)
+                wiki_url = wikidata_index.by_name.get(candidate_key)
+            if wiki_url:
+                break
         if wiki_url:
             db.set_organization_website(org.organization_id, wiki_url, Confidence.HIGH)
+            db.add_website_candidate(
+                org.organization_id,
+                wiki_url,
+                ResolutionMethod.WIKIDATA,
+                reachable=None,  # Wikidata matches aren't reachability-checked
+                confidence=Confidence.HIGH,
+                promoted=True,
+            )
             found_wikidata += 1
             continue
 
@@ -580,30 +960,163 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
         # HIFLD having stale data for an organization shouldn't cost it its
         # existing chance at a guessed match.
         hifld_url = None
-        if key:
+        for candidate_key in candidate_keys:
             if org.state:
-                hifld_url = hifld_index.by_name_state.get((key, org.state))
+                hifld_url = hifld_index.by_name_state.get((candidate_key, org.state))
             if hifld_url is None:
-                hifld_url = hifld_index.by_name.get(key)
+                hifld_url = hifld_index.by_name.get(candidate_key)
+            if hifld_url:
+                break
         if hifld_url is None:
             hifld_skipped += 1
         else:
             hifld_matched += 1
             check_url = hifld_url if "://" in hifld_url else f"https://{hifld_url}"
-            if await checker(check_url) is not None:
+            html = await checker(check_url)
+            if html is not None:
                 hifld_reachable += 1
+                # page_matches_organization is corroborating evidence for the
+                # confidence tier, never a rejection gate - a renamed
+                # facility, a health-system landing page, or a JS-rendered
+                # site can all legitimately fail this check and are still
+                # stored (see website_enrichment.py's docstring).
+                if page_matches_organization(html, org.name):
+                    hifld_confidence = Confidence.MEDIUM
+                    hifld_medium += 1
+                else:
+                    hifld_confidence = Confidence.LOW
+                    hifld_low += 1
                 db.set_organization_website(
-                    org.organization_id, hifld_url, Confidence.MEDIUM, source="HIFLD"
+                    org.organization_id, hifld_url, hifld_confidence, source="HIFLD"
+                )
+                db.add_website_candidate(
+                    org.organization_id,
+                    hifld_url,
+                    ResolutionMethod.HIFLD,
+                    reachable=True,
+                    confidence=hifld_confidence,
+                    promoted=True,
                 )
                 hifld_stored += 1
                 continue
             hifld_unreachable += 1
+            db.add_website_candidate(
+                org.organization_id,
+                hifld_url,
+                ResolutionMethod.HIFLD,
+                reachable=False,
+                promoted=False,
+            )
+
+        # VA Facilities API - same state-then-name lookup shape and same
+        # reachability-gated, never-HIGH discipline as HIFLD (see
+        # va_facilities.py's module docstring). Empty (skipped without a
+        # network call) when no va_api_key is configured, so this block is
+        # a no-op cost-wise for anyone not using the source.
+        va_url = None
+        for candidate_key in candidate_keys:
+            if org.state:
+                va_url = va_index.by_name_state.get((candidate_key, org.state))
+            if va_url is None:
+                va_url = va_index.by_name.get(candidate_key)
+            if va_url:
+                break
+        if va_url is None:
+            va_skipped += 1
+        else:
+            va_matched += 1
+            check_url = va_url if "://" in va_url else f"https://{va_url}"
+            html = await checker(check_url)
+            if html is not None:
+                va_reachable += 1
+                if page_matches_organization(html, org.name):
+                    va_confidence = Confidence.MEDIUM
+                    va_medium += 1
+                else:
+                    va_confidence = Confidence.LOW
+                    va_low += 1
+                db.set_organization_website(org.organization_id, va_url, va_confidence, source="VA")
+                db.add_website_candidate(
+                    org.organization_id,
+                    va_url,
+                    ResolutionMethod.VA_API,
+                    reachable=True,
+                    confidence=va_confidence,
+                    promoted=True,
+                )
+                va_stored += 1
+                continue
+            va_unreachable += 1
+            db.add_website_candidate(
+                org.organization_id,
+                va_url,
+                ResolutionMethod.VA_API,
+                reachable=False,
+                promoted=False,
+            )
+
+        # OSM - same state-then-name lookup shape and same reachability-gated,
+        # never-HIGH discipline as HIFLD/VA (see osm_hospitals.py's module
+        # docstring). Empty (skipped without a network call - this index is
+        # loaded from a local cache file, never fetched live here) when no
+        # osm_cache_path is configured or the cache doesn't exist yet.
+        osm_url = None
+        for candidate_key in candidate_keys:
+            if org.state:
+                osm_url = osm_index.by_name_state.get((candidate_key, org.state))
+            if osm_url is None:
+                osm_url = osm_index.by_name.get(candidate_key)
+            if osm_url:
+                break
+        if osm_url is None:
+            osm_skipped += 1
+        else:
+            osm_matched += 1
+            check_url = osm_url if "://" in osm_url else f"https://{osm_url}"
+            html = await checker(check_url)
+            if html is not None:
+                osm_reachable += 1
+                if page_matches_organization(html, org.name):
+                    osm_confidence = Confidence.MEDIUM
+                    osm_medium += 1
+                else:
+                    osm_confidence = Confidence.LOW
+                    osm_low += 1
+                db.set_organization_website(
+                    org.organization_id, osm_url, osm_confidence, source="OSM"
+                )
+                db.add_website_candidate(
+                    org.organization_id,
+                    osm_url,
+                    ResolutionMethod.OSM,
+                    reachable=True,
+                    confidence=osm_confidence,
+                    promoted=True,
+                )
+                osm_stored += 1
+                continue
+            osm_unreachable += 1
+            db.add_website_candidate(
+                org.organization_id,
+                osm_url,
+                ResolutionMethod.OSM,
+                reachable=False,
+                promoted=False,
+            )
 
         url, confidence = await discover_website(
             org, checker, config.organizations.website_enrichment_requests_per_second
         )
         if url and confidence is not None:
             db.set_organization_website(org.organization_id, url, confidence)
+            db.add_website_candidate(
+                org.organization_id,
+                url,
+                ResolutionMethod.GUESS,
+                reachable=True,
+                confidence=confidence,
+                promoted=True,
+            )
             found_guess += 1
         else:
             db.mark_website_checked(org.organization_id)
@@ -616,7 +1129,20 @@ async def cmd_enrich_organizations(config: Config, args: argparse.Namespace) -> 
     print(f"  hifld reachable       : {hifld_reachable}")
     print(f"  hifld unreachable     : {hifld_unreachable}")
     print(f"  hifld stored          : {hifld_stored}")
+    print(f"    (page-matched -> MEDIUM: {hifld_medium}, no match -> LOW: {hifld_low})")
     print(f"  hifld skipped (no match) : {hifld_skipped}")
+    print(f"  va matched            : {va_matched}")
+    print(f"  va reachable          : {va_reachable}")
+    print(f"  va unreachable        : {va_unreachable}")
+    print(f"  va stored             : {va_stored}")
+    print(f"    (page-matched -> MEDIUM: {va_medium}, no match -> LOW: {va_low})")
+    print(f"  va skipped (no match) : {va_skipped}")
+    print(f"  osm matched            : {osm_matched}")
+    print(f"  osm reachable          : {osm_reachable}")
+    print(f"  osm unreachable        : {osm_unreachable}")
+    print(f"  osm stored             : {osm_stored}")
+    print(f"    (page-matched -> MEDIUM: {osm_medium}, no match -> LOW: {osm_low})")
+    print(f"  osm skipped (no match) : {osm_skipped}")
     print(f"  found via guessing    : {found_guess}")
     if args.dry_run:
         print(f"\n  {db.pending_writes} write operation(s) were rolled back.")
@@ -762,6 +1288,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p = sub.add_parser(
+        "ingest-providers",
+        help="import one provider dataset/API source (e.g. Cigna FHIR Provider Directory)",
+    )
+    p.add_argument(
+        "--provider-adapter",
+        default="cigna_fhir",
+        choices=sorted(PROVIDER_DATASET_ADAPTERS),
+        help="which provider dataset adapter to use (default: cigna_fhir)",
+    )
+    p.add_argument(
+        "--discovery-mode",
+        default=None,
+        choices=["state_scoped", "national"],
+        help=(
+            "override providers.cigna_fhir_discovery_mode for this run only "
+            "(default: use whatever config.yaml sets, itself state_scoped "
+            "unless changed - see NATIONAL_DISCOVERY_DESIGN.md's migration "
+            "discipline before ever setting this to national)"
+        ),
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="do everything, write nothing (rolled back)"
+    )
+
+    p = sub.add_parser(
         "enrich-organizations",
         help="best-effort website discovery for organizations missing one",
     )
@@ -802,6 +1353,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("export-organizations", help="write organizations.xlsx")
+
+    p = sub.add_parser(
+        "refresh-osm-cache",
+        help="rebuild the local OSM hospital cache from a Geofabrik .osm.pbf extract "
+        "(heavy, ~12GB download - run occasionally, never automatically)",
+    )
+    p.add_argument(
+        "--pbf-path",
+        default=None,
+        help="path to an already-downloaded .osm.pbf (default: download to a temp file "
+        "next to the cache)",
+    )
 
     return ap
 
@@ -860,6 +1423,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_query(config, args)
     elif args.cmd == "ingest-organizations":
         cmd_ingest_organizations(config, args)
+    elif args.cmd == "ingest-providers":
+        cmd_ingest_providers(config, args)
     elif args.cmd == "enrich-organizations":
         asyncio.run(cmd_enrich_organizations(config, args))
     elif args.cmd == "link-organizations":
@@ -868,6 +1433,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_export_organizations(config, args)
     elif args.cmd == "build-map-data":
         cmd_build_map_data(config, args)
+    elif args.cmd == "refresh-osm-cache":
+        cmd_refresh_osm_cache(config, args)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from providermap.website_enrichment import (
     _distinctive_tokens,
     candidate_domains,
     discover_website,
+    page_matches_organization,
 )
 
 
@@ -123,3 +124,33 @@ class TestDiscoverWebsite:
         assert url is None
         assert confidence is None
         assert called is False
+
+
+class TestPageMatchesOrganization:
+    """Phase 6.2 - the shared corroboration check reused by HIFLD/VA/OSM as
+    well as discover_website's own guessing fallback. Same tokenizer, same
+    matching rule as _distinctive_tokens already had - these tests pin down
+    that the shared helper reuses it exactly, not a reimplementation."""
+
+    def test_true_when_a_distinctive_token_is_present(self) -> None:
+        html = "<html><body>Welcome to Bannerdesert Medical Center</body></html>"
+        assert page_matches_organization(html, "Banner Desert Medical Center") is True
+
+    def test_false_when_no_distinctive_token_is_present(self) -> None:
+        html = "<html><body>Generic Health System - find a doctor</body></html>"
+        assert page_matches_organization(html, "Banner Desert Medical Center") is False
+
+    def test_case_insensitive_match(self) -> None:
+        html = "<html><body>BANNERDESERT is here</body></html>"
+        assert page_matches_organization(html, "Banner Desert Medical Center") is True
+
+    def test_no_org_name_yields_no_tokens_so_never_matches(self) -> None:
+        assert page_matches_organization("<html>anything</html>", None) is False
+
+    def test_generic_words_alone_never_match(self) -> None:
+        """A page that only happens to contain generic hospital vocabulary
+        (not the actual distinctive part of the name) must not match -
+        _distinctive_tokens already filters these; this pins down that the
+        shared helper doesn't reintroduce them."""
+        html = "<html><body>medical center health care system</body></html>"
+        assert page_matches_organization(html, "Banner Desert Medical Center") is False

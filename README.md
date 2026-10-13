@@ -14,6 +14,43 @@ code in it (see [Architecture](#architecture)).
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 
+## At a glance
+
+**Problem:** centralized billing data records where a claim was *billed*, not
+where the provider actually *practices*. ProviderMap builds the
+provider → primary site of care mapping that billing records can be joined
+against.
+
+```mermaid
+flowchart LR
+    A[Provider sources<br/>Cigna FHIR API<br/>AdventHealth directory] --> C[Adapters<br/>one per source]
+    B[Organization sources<br/>CMS hospitals, Wikidata,<br/>HIFLD, OpenStreetMap, VA] --> C
+    C --> D[Classify + dedupe<br/>NPPES NPI Registry]
+    D --> E[(SQLite<br/>change tracking,<br/>checkpoint/resume)]
+    E --> F[Excel exports]
+```
+
+- **Sources:** the CMS NPPES NPI Registry, Cigna's public FHIR provider
+  directory API, CMS Hospital General Information, Wikidata, HIFLD,
+  OpenStreetMap, and the VA Facilities API. AdventHealth's public directory
+  is the original reference adapter.
+- **Adapter design:** adding a new health system or data source means
+  writing one adapter; the pipeline itself does not change.
+- **Data-quality finding:** live validation against Cigna's FHIR server
+  showed one traversal strategy silently dropping 1,553 of 42,108 locations
+  (HTTP 200, `total: 0`, no error) after it had passed every offline test.
+  The approach was rejected and silent empty pages now fail loudly. See
+  [ADR-0002](docs/adr/0002-close-alternate-discovery-traversals.md).
+- **Engineering:** 483 pytest tests (477 offline, plus 6 opt-in live-API
+  tests run with `pytest -m live`), CI with Ruff, Black, and mypy,
+  resumable checkpoints, and disk-backed spooling so a full state run
+  doesn't have to fit in memory.
+
+The sections below document the original AdventHealth pipeline in depth.
+The Cigna FHIR adapter's design and evidence live in
+[`adapters/providers/cigna_fhir/`](adapters/providers/cigna_fhir/) and
+[`docs/adr/`](docs/adr/).
+
 ---
 
 ## Features

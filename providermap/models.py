@@ -40,6 +40,20 @@ class Confidence(str, Enum):
     LOW = "low"
 
 
+class IdentityConfidence(str, Enum):
+    """How much to trust an *identity* fact (an alias or a system-membership
+    link) - deliberately a separate enum from :class:`Confidence`, which
+    scores *website* trust. "We're sure this facility belongs to Ballad
+    Health" and "we're sure this URL is Ballad Health's site" are independent
+    claims (see ROADMAP.md's Phase 5.1 architecture notes); collapsing them
+    into one enum would hide that distinction.
+    """
+
+    HIGH = "high"  # verified ownership/system relationship
+    MEDIUM = "medium"  # strong alias or inferred relationship
+    LOW = "low"  # weak inference
+
+
 class ScrapeStatus(str, Enum):
     """State of one URL in the resume ledger."""
 
@@ -61,18 +75,33 @@ class UpsertOutcome(str, Enum):
 
 @dataclass(frozen=True)
 class NpiPolicy:
-    """How strict to be about NPIs.
+    """The record-completeness policy :func:`~providermap.validator.validate_provider`
+    checks against - how strict to be about NPIs, plus the one non-NPI
+    completeness rule (``require_profile_url``) that turned out to need the
+    same per-source flexibility.
 
     See ``config.example.yaml`` for the user-facing documentation of each
     field; this is its typed counterpart. The pipeline is designed to produce
     a usable dataset even with NPPES switched off entirely
     (``require_nppes=False``, the default) - every degradation is recorded on
     the :class:`Provider` it affects rather than silently assumed away.
+
+    ``require_profile_url`` defaults to ``True`` - the website-scraping
+    pipeline (``adapters.base.SiteAdapter`` sources, e.g. AdventHealth)
+    identifies a provider by their profile page, so a record with none is
+    genuinely incomplete there. A provider *dataset* source (see
+    ``adapters/providers/base_dataset.py``) identifies a provider by a stable
+    id (NPI/FHIR id) instead and has no such page at all; ``cmd_ingest_providers``
+    builds a copy of this policy with ``require_profile_url=False`` for those
+    adapters (see ``ProviderDatasetAdapter.requires_profile_url``), rather
+    than this module or the validator knowing anything about *why* - the
+    policy is what's source-specific, not the validation logic itself.
     """
 
     checksum: str = "warn"  # "strict" | "warn" | "off"
     require_npi: bool = True
     require_nppes: bool = False
+    require_profile_url: bool = True
 
     def __post_init__(self) -> None:
         if self.checksum not in {"strict", "warn", "off"}:
@@ -256,6 +285,129 @@ class Organization:
     organization_id: int | None = None
     created_date: str | None = None
     updated_date: str | None = None
+
+
+@dataclass
+class HealthSystem:
+    """A parent health system - Ballad Health, Ascension, Mercy, ... - as a
+    first-class entity independent of any one facility (schema v7).
+
+    Belongs to the Organization Identity Resolution layer (see ROADMAP.md's
+    Phase 5.1 architecture notes): it answers "what system is this facility
+    part of", never "what is this system's verified website". ``primary_domain``
+    is an identity fact ("this system is publicly known by this domain"),
+    the same pattern :class:`Organization`'s own ``website`` already uses -
+    not a claim that's been through the reachability/candidate-ranking
+    machinery Website Enrichment owns.
+    """
+
+    name: str | None = None
+    normalized_name: str | None = None
+    primary_domain: str | None = None
+
+    # Read-only bookkeeping populated by the database layer on read.
+    system_id: int | None = None
+    created_at: str | None = None
+
+
+@dataclass
+class OrganizationAlias:
+    """An alternate name for an :class:`Organization` - a rebrand, a
+    historical name, or a Wikidata alias (schema v7).
+
+    Purely an identity fact: no website concept anywhere on this dataclass.
+    Handles the CMS-name-vs-current-name drift Phase 4 measured (e.g. "Wellmont
+    Holston Valley Medical Center" vs. "Holston Valley Medical Center").
+    """
+
+    organization_id: int
+    alias: str
+    normalized_alias: str | None = None
+    source: str | None = None  # e.g. "wikidata" | "manual"
+    confidence: IdentityConfidence | None = None
+
+    # Read-only bookkeeping populated by the database layer on read.
+    id: int | None = None
+    created_at: str | None = None
+
+
+@dataclass
+class OrganizationSystemMembership:
+    """One period of ``Organization`` belonging to a ``HealthSystem``
+    (schema v7).
+
+    Deliberately a separate, historied table rather than a column on
+    ``organizations`` - ownership changes over time (Phase 4 found exactly
+    this pattern: an independent facility later acquired by a system).
+    ``valid_to IS NULL`` marks the currently-active membership; an ownership
+    change closes the old row (sets ``valid_to``) and opens a new one rather
+    than overwriting history.
+    """
+
+    organization_id: int
+    system_id: int
+    source: str | None = None  # e.g. "manual_seed" | "cms_ownership"
+    confidence: IdentityConfidence | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None  # NULL/None = currently active
+
+    # Read-only bookkeeping populated by the database layer on read.
+    membership_id: int | None = None
+    created_at: str | None = None
+
+
+class ResolutionMethod(str, Enum):
+    """How a :class:`WebsiteCandidate` was found - the ``resolution_method``
+    Phase 5.1's architecture review called for, so a future investigator can
+    answer "why did ProviderMap choose this website" without rerunning
+    enrichment (schema v8).
+
+    ``WIKIDATA``, ``HIFLD``, ``VA_API``, ``GUESS``, and (Phase 6.1)
+    ``OSM`` are produced by live code. The rest of this vocabulary is
+    defined now - it's a stable, one-value-per-source-module set that
+    shouldn't need widening later - but stays unused until the sources they
+    name (a future search resolver, identity-layer-driven matching) exist.
+    """
+
+    WIKIDATA = "wikidata"
+    HIFLD = "hifld"
+    GUESS = "guess"
+    VA_API = "va_api"
+    OSM = "osm"
+    SEARCH_API = "search_api"
+    SYSTEM_DOMAIN = "system_domain"
+    ALIAS_MATCH = "alias_match"
+    MANUAL = "manual"
+
+
+@dataclass
+class WebsiteCandidate:
+    """One website URL considered for an :class:`Organization`, whether or
+    not it was ultimately promoted (schema v8).
+
+    Website Enrichment owns this table - it never becomes Identity
+    Resolution's responsibility. ``system_membership_id`` is the one
+    deliberately nullable, one-directional reference to the identity layer
+    (see ROADMAP.md's Phase 5.1 architecture notes): a candidate may *cite*
+    an :class:`OrganizationSystemMembership` row as its justification, but
+    identity resolution has no awareness this table exists.
+
+    Logging every candidate - not just the winner - is what makes a
+    rejected HIFLD URL (matched, but failed the reachability check) an
+    auditable row instead of a number that vanishes into a counter.
+    """
+
+    organization_id: int
+    candidate_url: str
+    resolution_method: ResolutionMethod | None = None
+    reachable: bool | None = None  # None = not checked (e.g. a Wikidata match)
+    confidence: Confidence | None = None
+    system_membership_id: int | None = None
+    promoted: bool = False
+
+    # Read-only bookkeeping populated by the database layer on read.
+    candidate_id: int | None = None
+    created_at: str | None = None
 
 
 @dataclass

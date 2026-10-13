@@ -45,6 +45,14 @@ dev = [
 render = [
     "playwright==1.61.0",
 ]
+# Only needed for `providermap refresh-osm-cache` (providermap/osm_hospitals.py)
+# - parsing the bulk Geofabrik .osm.pbf extract. Not needed for normal
+# `enrich-organizations` runs, which only read the small JSON cache that
+# command produces - hence a separate extra rather than a hard dependency:
+# install with `pip install -e ".[osm]"`.
+osm = [
+    "osmium==4.3.1",
+]
 
 # Map dashboard: `providermap build-map-data` (geocoding + snapshot) and
 # `streamlit run dashboard/app.py`. Kept out of the core dependencies - the
@@ -124,3 +132,7 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+addopts = "-m 'not live'"
+markers = [
+    "live: hits a real external network endpoint (e.g. fhir.cigna.com) - excluded from the default `pytest` run by addopts above. Run explicitly with `pytest -m live`.",
+]

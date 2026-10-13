@@ -29,6 +29,37 @@ and this project uses [Semantic Versioning](https://semver.org/).
   New optional `dashboard` extra; CI now installs it so the tests can import
   their dependencies. Fields a run never collected are labelled
   `Not assessed` / `Unknown` rather than left blank.
+- **National discovery mode for the Cigna FHIR provider dataset adapter —
+  built, offline-validated, and rejected for production use.**
+  `adapters/providers/cigna_fhir/` ships a working, production-verified
+  **state-scoped** discovery strategy (`Location?address-state=X` → batched
+  `PractitionerRole` lookups, with checkpoint/resume and bounded
+  concurrency). An initial small-scale probe suggested an unscoped
+  `PractitionerRole` traversal (avoiding per-location enumeration entirely)
+  returned a complete relationship graph, and a national discovery
+  architecture was designed, approved
+  ([`docs/adr/0001-national-discovery-strategy.md`](docs/adr/0001-national-discovery-strategy.md)),
+  and built: `discovery.py`'s `NationalDiscovery` and `resource_spool.py`'s
+  `ResourceSpool`, opt-in via `cigna_fhir_discovery_mode: "national"`,
+  passing all thirteen offline validation criteria (V1-V13, including
+  export-equivalence) against synthetic fixtures. A later live validation
+  against the real `fhir.cigna.com` server at production pagination scale
+  reversed the original finding the design rested on: the national/`_include`
+  traversal silently dropped data on 33 pages (`HTTP 200`, `total:0`),
+  recovering only 40,555 of 42,108 expected locations — 228 role-bearing
+  locations and 831 role ids missing with no error signal at all, a defect no
+  offline fixture test could surface. That defect, plus OR-list batching and
+  alternate-anchor traversals already ruled out earlier, closed every
+  alternative investigated — per-location state-scoped discovery is the
+  correct and only production discovery architecture for this adapter. The
+  national-mode code is **not removed**; it remains opt-in and
+  offline-tested, but must never be selected against the real API. See
+  [`docs/adr/0002-close-alternate-discovery-traversals.md`](docs/adr/0002-close-alternate-discovery-traversals.md)
+  (supersedes ADR-0001) and
+  `adapters/providers/cigna_fhir/NATIONAL_DISCOVERY_DESIGN.md`'s status
+  notice for the full evidence and decision. The existing state-scoped
+  adapter is unaffected; remaining work targets making it production-ready
+  (streaming/memory, checkpoint tuning), not a new traversal strategy.
 - **`providermap export-organizations`** - a fourth workbook,
   `organizations.xlsx`, alongside the three `providermap export` already
   writes. One row per organization plus a linked-provider count (from
