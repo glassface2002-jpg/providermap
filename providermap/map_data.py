@@ -62,6 +62,7 @@ def load_export(label: str, path: Path) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name=EXPORT_SHEET, usecols=list(EXPORT_COLUMNS), dtype=str)
     df = df.rename(columns=EXPORT_COLUMNS)[list(EXPORT_COLUMNS.values())]
     df = df.astype(object).where(df.notna(), None)
+    df["state"] = df["state"].str.strip().str.upper()  # sources contain typos like "Fl", "fL"
     df["provider_type"] = df["provider_type"].fillna(NOT_ASSESSED)
     df["site_confidence"] = df["site_confidence"].fillna(NOT_ASSESSED)
     df["accepting_new_patients"] = df["accepting_new_patients"].fillna(UNKNOWN)

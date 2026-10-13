@@ -6,6 +6,7 @@ header breaks these tests instead of silently blanking a dashboard column.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from argparse import Namespace
 from pathlib import Path
@@ -122,6 +123,12 @@ class TestLoadExport:
         assert row["site_confidence"] == NOT_ASSESSED
         assert row["accepting_new_patients"] == UNKNOWN
         assert row["profile_url"] is None  # genuinely absent stays None, not "nan"
+
+    def test_state_codes_are_normalised(self, db: Database, tmp_path: Path):
+        """Sources contain typos such as 'Fl' / 'fL' / 'Co' that would split a state in the filter."""
+        messy = [dataclasses.replace(_full(), state=" fL "), _sparse()]
+        path = _export(db, tmp_path / "messy.xlsx", messy)
+        assert sorted(load_export("x", path)["state"]) == ["FL", "RI"]
 
     def test_missing_expected_column_fails_loudly(self, tmp_path):
         bad = tmp_path / "bad.xlsx"
