@@ -11,6 +11,7 @@ import ast
 import base64
 import importlib.util
 import json
+import re
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -196,3 +197,19 @@ def test_map_markers_carry_their_location_id_first(app: AppTest):
         [_decode(t["customdata"]).reshape(len(_decode(t["lat"])), -1)[:, 0] for t in spec["data"]]
     )
     assert sorted(ids.astype(int).tolist()) == [0, 1]  # one marker per distinct mapped point
+
+
+def test_deploy_requirements_are_pinned_like_the_dashboard_extra():
+    """Streamlit Cloud installs requirements.txt; local installs use the pyproject extra."""
+    dashboard_dir = Path(APP).parent
+    pyproject = (dashboard_dir.parent / "pyproject.toml").read_text(encoding="utf-8")
+    block = re.search(r"^dashboard = \[(.*?)\]", pyproject, re.DOTALL | re.MULTILINE)
+    assert block
+    extra = set(re.findall(r'"([^"]+==[^"]+)"', block.group(1)))
+    deployed = {
+        line.strip()
+        for line in (dashboard_dir / "requirements.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+    assert deployed
+    assert deployed <= extra
