@@ -243,6 +243,31 @@ def cmd_export_organizations(config: Config, args: argparse.Namespace) -> None:
     db.close()
 
 
+def cmd_build_map_data(config: Config, args: argparse.Namespace) -> None:
+    from .geocode import census_client, geocode_addresses
+    from .map_data import build_info, build_snapshot, write_snapshot
+
+    inputs: dict[str, Path] = {}
+    for spec in args.input:
+        label, sep, path = spec.partition("=")
+        if not (sep and label and path) or label in inputs:
+            print(f"\n--input must be a unique LABEL=PATH, got: {spec}\n", file=sys.stderr)
+            sys.exit(2)
+        inputs[label] = Path(path)
+
+    cache_path = Path(config.cache.dir) / "geocode.csv"
+    with census_client(config.politeness.user_agent) as client:
+        snapshot = build_snapshot(
+            inputs, lambda addrs: geocode_addresses(addrs, cache_path, client)
+        )
+    write_snapshot(snapshot, Path(args.out))
+
+    print(f"\nWrote {len(snapshot)} providers to {args.out}")
+    for label, stats in build_info(snapshot)["datasets"].items():
+        print(f"  {label}: {stats['providers']} providers, geocoded {stats['geocode_precision']}")
+    print()
+
+
 def cmd_status(config: Config, args: argparse.Namespace) -> None:
     db = Database(db_path(config, args.test))
     c = db.counts()
@@ -658,7 +683,9 @@ def build_parser() -> argparse.ArgumentParser:
             "    providermap ingest-organizations\n"
             "    providermap enrich-organizations   # best-effort website discovery\n"
             "    providermap link-organizations     # link providers to organizations\n"
-            "    providermap export-organizations   # write organizations.xlsx\n"
+            "    providermap export-organizations   # write organizations.xlsx\n\n"
+            "Map dashboard (see dashboard/):\n"
+            '    providermap build-map-data --input "AdventHealth=providers.xlsx"\n'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -759,6 +786,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="do everything, write nothing (rolled back)"
     )
 
+    p = sub.add_parser(
+        "build-map-data",
+        help="geocode providers.xlsx exports into the map dashboard's data snapshot",
+    )
+    p.add_argument(
+        "--input",
+        action="append",
+        required=True,
+        metavar="LABEL=PATH",
+        help='a providers.xlsx export and the dataset name to show for it, e.g. "AdventHealth=providers.xlsx" (repeatable)',
+    )
+    p.add_argument(
+        "--out", default="dashboard/data", help="output directory (default: dashboard/data)"
+    )
+
     sub.add_parser("export-organizations", help="write organizations.xlsx")
 
     return ap
@@ -791,6 +833,7 @@ def main(argv: list[str] | None = None) -> None:
         "refresh",
         "trial",
         "enrich-organizations",
+        "build-map-data",
     } and not getattr(args, "test", False)
     if live:
         check_user_agent(config)
@@ -823,6 +866,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_link_organizations(config, args)
     elif args.cmd == "export-organizations":
         cmd_export_organizations(config, args)
+    elif args.cmd == "build-map-data":
+        cmd_build_map_data(config, args)
 
 
 if __name__ == "__main__":

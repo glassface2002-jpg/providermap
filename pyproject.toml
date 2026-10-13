@@ -116,7 +116,7 @@ disallow_untyped_defs = false  # aspirational; not yet enforced project-wide
 exclude = ["adapters/providers/adventhealth/fixtures\\.py", "tests/"]
 
 [[tool.mypy.overrides]]
-module = ["selectolax.*", "openpyxl.*", "playwright.*", "zipcodes.*"]
+module = ["selectolax.*", "openpyxl.*", "playwright.*", "zipcodes.*", "pandas.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

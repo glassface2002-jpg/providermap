@@ -65,7 +65,7 @@ class GeoResult(NamedTuple):
     precision: str
 
 
-_UNRESOLVED = GeoResult(None, None, None, PRECISION_NONE)
+UNRESOLVED = GeoResult(None, None, None, PRECISION_NONE)
 
 
 def strip_unit(street: str | None) -> str | None:
@@ -108,7 +108,7 @@ def parse_batch_response(text: str, ids: dict[str, str]) -> dict[str, GeoResult]
     an entry: matches carry coordinates, ``No_Match`` / ``Tie`` / malformed rows
     are recorded as unresolved so they are not re-sent on the next run.
     """
-    results: dict[str, GeoResult] = {key: _UNRESOLVED for key in ids.values()}
+    results: dict[str, GeoResult] = {key: UNRESOLVED for key in ids.values()}
     for row in csv.reader(io.StringIO(text)):
         if len(row) < 6 or row[0] not in ids or row[2] != "Match":
             continue
@@ -136,7 +136,7 @@ def _load_cache(path: Path) -> dict[str, GeoResult]:
                     PRECISION_ADDRESS,
                 )
             else:
-                cache[row["key"]] = _UNRESOLVED
+                cache[row["key"]] = UNRESOLVED
     return cache
 
 
