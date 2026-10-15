@@ -441,14 +441,21 @@ providermap --config config.az.yaml export             # writes exports/arizona/
 On Windows use `run.bat --config config.az.yaml ...`. If the run is interrupted,
 run the same command again and it resumes from the checkpoint. Keep the machine
 awake while it runs. The first phase walks the state's locations one page at a
-time, which Cigna's paging does not allow to be parallelised; the second phase
-can fetch several batches at once (`providers.cigna_fhir_max_concurrent_requests`,
-default 1, still limited by `cigna_fhir_requests_per_second`).
+time, which Cigna's paging does not allow to be parallelised. The second phase
+makes one `PractitionerRole` request per location (Cigna silently drops all but
+one id from a batched request, so batching is not an option) and can run several
+at once (`providers.cigna_fhir_max_concurrent_requests`, default 1, still capped
+by `cigna_fhir_requests_per_second`).
 
-For scale, the Rhode Island pilot made 1,686 requests in about 49 minutes
-(`adapters/providers/cigna_fhir/CONCURRENCY_DESIGN.md`), and Florida once ran over
-5 hours without finishing before the speed and memory fixes
-(`docs/adr/0001-national-discovery-strategy.md`). To put the result on the map,
+So run time grows with the number of locations in the state, not with its
+providers. Rhode Island (42,108 locations, 8,434 providers) took about 4.0 hours
+in the live release-gate runs recorded in the commit history, and Florida ran over
+5 hours without finishing even location enumeration, before the speed and memory
+fixes (`docs/adr/0001-national-discovery-strategy.md`). Expect roughly a day for a
+state several times Rhode Island's size. (The ~49-minute figure in
+`CONCURRENCY_DESIGN.md` is from an earlier pilot that batched 50 locations per
+request and so silently missed about 98% of them; it is not comparable.) To put the
+result on the map,
 pass the export to the dashboard builder, e.g.
 `providermap build-map-data --input "Arizona=exports/arizona/providers.xlsx"`.
 
