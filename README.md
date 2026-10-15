@@ -431,6 +431,7 @@ providers:
   cigna_fhir_state_scoped_spool: true    # disk-backed, low-RAM mode
   resource_spool_path: "database/az_spool.db"
   checkpoint_path: "database/az_checkpoint.db"   # makes the run resumable
+  cigna_fhir_max_concurrent_requests: 4  # important: the default 1 is ~4x slower (see below)
 ```
 
 ```bash
@@ -444,8 +445,10 @@ awake while it runs. The first phase walks the state's locations one page at a
 time, which Cigna's paging does not allow to be parallelised. The second phase
 makes one `PractitionerRole` request per location (Cigna silently drops all but
 one id from a batched request, so batching is not an option) and can run several
-at once (`providers.cigna_fhir_max_concurrent_requests`, default 1, still capped
-by `cigna_fhir_requests_per_second`).
+at once (`providers.cigna_fhir_max_concurrent_requests`, still capped by
+`cigna_fhir_requests_per_second`, default 5). A phase-2 request took about 0.8 s
+when measured, so the default of 1 manages only ~1.3 requests/s while 4 reaches
+the 5/s cap.
 
 So run time grows with the number of locations in the state, not with its
 providers. Rhode Island (42,108 locations, 8,434 providers) took about 4.0 hours
