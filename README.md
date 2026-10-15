@@ -427,16 +427,21 @@ providermap build-map-data \
     --input "AdventHealth=exports/output/providers.xlsx" \
     --input "Another run=path/to/other_providers.xlsx"
 
-# 2. Run the app
+# 2. Optional: trauma-center and NICU layers from two CSVs
+providermap build-hospital-data --trauma trauma_centers.csv --nicu nicu_centers.csv
+
+# 3. Run the app
 streamlit run dashboard/app.py
 ```
 
 `build-map-data` geocodes with the free US Census batch geocoder (no API key).
 Addresses it cannot match at street level fall back to the centre of their ZIP
 code and are labelled as such; addresses with no usable ZIP are kept in the
-counts but left off the map. Answers are cached in `.cache/geocode.csv`, so a
-rerun only sends addresses it has not seen. The output is two small files,
-`dashboard/data/providers.parquet` and `build_info.json`, which are committed:
+counts but left off the map. Addresses with no street or ZIP match fall back to
+their ZIP code, then city. Answers are cached in `.cache/geocode.csv`, so a rerun
+only sends addresses it has not seen. The output is small files
+(`dashboard/data/providers.parquet`, `build_info.json`, and `hospitals.parquet`
+if you built the hospital layers), which are committed:
 the app reads only those, so it needs neither the pipeline nor the database.
 
 To publish it, create a free app at [share.streamlit.io](https://share.streamlit.io)

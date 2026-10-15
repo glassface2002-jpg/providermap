@@ -19,7 +19,15 @@ import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from providermap.map_data import NOT_ASSESSED, SNAPSHOT_COLUMNS, UNKNOWN, write_snapshot
+from providermap.map_data import (
+    HOSPITAL_COLUMNS,
+    NOT_ASSESSED,
+    NOT_STATED,
+    SNAPSHOT_COLUMNS,
+    UNKNOWN,
+    write_hospital_snapshot,
+    write_snapshot,
+)
 
 APP = str(Path(__file__).resolve().parent.parent / "dashboard" / "app.py")
 
@@ -50,9 +58,8 @@ def _row(**overrides: object) -> dict[str, object]:
     return base
 
 
-@pytest.fixture()
-def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
-    rows = [
+def _provider_rows() -> list[dict[str, object]]:
+    return [
         _row(),
         _row(name="Ana Lopez, NP", provider_type="Advanced Practice Provider", npi="1111111112"),
         _row(
@@ -71,9 +78,86 @@ def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
         ),
         _row(name="No Address", npi="1234567893", lat=None, lon=None, geocode_precision="none"),
     ]
-    write_snapshot(pd.DataFrame(rows, columns=SNAPSHOT_COLUMNS), tmp_path)
+
+
+@pytest.fixture()
+def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
+    write_snapshot(pd.DataFrame(_provider_rows(), columns=SNAPSHOT_COLUMNS), tmp_path)
     monkeypatch.setenv("PROVIDERMAP_DATA_DIR", str(tmp_path))
     return AppTest.from_file(APP, default_timeout=60).run()
+
+
+def _hospital(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = dict.fromkeys(HOSPITAL_COLUMNS)
+    base.update(
+        kind="trauma",
+        name="Rhode Island Hospital",
+        address="593 Eddy St",
+        city="Providence",
+        state="RI",
+        zip="02903",
+        level="I",
+        acs_verified="Yes",
+        lat=41.81,
+        lon=-71.41,
+        geocode_precision="address",
+    )
+    base.update(overrides)
+    return base
+
+
+def _hospital_rows() -> list[dict[str, object]]:
+    return [
+        _hospital(),
+        _hospital(
+            name="Phoenix Children's",
+            city="Phoenix",
+            state="AZ",
+            zip="85016",
+            address=None,
+            level=NOT_STATED,
+            acs_verified="No",
+            lat=33.47,
+            lon=-112.06,
+            geocode_precision="zip",
+        ),
+        _hospital(name="Not Placed", state="AZ", lat=None, lon=None, geocode_precision="none"),
+        _hospital(
+            kind="nicu",
+            name="Banner Desert",
+            city="Mesa",
+            state="AZ",
+            zip="85202",
+            address="1400 S Dobson Rd",
+            level="III",
+            acs_verified=None,
+            nicu_beds=40,
+            lat=33.39,
+            lon=-111.88,
+        ),
+    ]
+
+
+@pytest.fixture()
+def app_with_hospitals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
+    write_snapshot(pd.DataFrame(_provider_rows(), columns=SNAPSHOT_COLUMNS), tmp_path)
+    frame = pd.DataFrame(_hospital_rows(), columns=HOSPITAL_COLUMNS)
+    frame["nicu_beds"] = frame["nicu_beds"].astype("Int64")
+    write_hospital_snapshot(frame, tmp_path)
+    monkeypatch.setenv("PROVIDERMAP_DATA_DIR", str(tmp_path))
+    return AppTest.from_file(APP, default_timeout=60).run()
+
+
+def _layers(at: AppTest) -> list[dict]:
+    return json.loads(at.get("deck_gl_json_chart")[0].proto.json)["layers"]
+
+
+def _pick(at: AppTest, label: str, *values: str, sidebar: bool = False) -> AppTest:
+    widgets = at.sidebar.multiselect if sidebar else at.multiselect
+    control = next(m for m in widgets if m.label == label)
+    for value in values:
+        control.select(value)
+    return at.run()
 
 
 def _metrics(at: AppTest) -> dict[str, str]:
@@ -277,3 +361,138 @@ def test_a_rebuilt_snapshot_is_not_hidden_by_the_cache(app: AppTest, tmp_path: P
     refreshed = AppTest.from_file(APP, default_timeout=60).run()
     assert not refreshed.exception
     assert _metrics(refreshed)["Providers"] == "1"
+
+
+def test_no_hospital_control_without_a_hospital_snapshot(app: AppTest):
+    assert "Hospitals" not in [m.label for m in app.multiselect]
+
+
+class TestHospitalLayers:
+    def test_control_is_offered_and_starts_empty(self, app_with_hospitals: AppTest):
+        assert not app_with_hospitals.exception
+        control = next(m for m in app_with_hospitals.multiselect if m.label == "Hospitals")
+        assert control.options == ["Trauma centers", "NICUs"]
+        assert [layer["id"] for layer in _layers(app_with_hospitals)] == ["locations"]
+
+    def test_rings_sit_beneath_the_provider_dots(self, app_with_hospitals: AppTest):
+        at = _pick(app_with_hospitals, "Hospitals", "Trauma centers", "NICUs")
+        assert not at.exception
+        assert [layer["id"] for layer in _layers(at)] == [
+            "trauma-centers",
+            "nicu-centers",
+            "locations",  # last = drawn on top, so provider dots stay clickable
+        ]
+
+    def test_trauma_rings_default_to_acs_verified_only(self, app_with_hospitals: AppTest):
+        at = _pick(app_with_hospitals, "Hospitals", "Trauma centers")
+        trauma = next(layer for layer in _layers(at) if layer["id"] == "trauma-centers")
+        assert [row["site"] for row in trauma["data"]] == ["Rhode Island Hospital"]
+        assert next(c for c in at.checkbox if "ACS-verified" in c.label).value is True
+
+    def test_unticking_shows_every_placed_trauma_center(self, app_with_hospitals: AppTest):
+        at = _pick(app_with_hospitals, "Hospitals", "Trauma centers")
+        next(c for c in at.checkbox if "ACS-verified" in c.label).uncheck().run()
+        trauma = next(layer for layer in _layers(at) if layer["id"] == "trauma-centers")
+        assert sorted(row["site"] for row in trauma["data"]) == [
+            "Phoenix Children's",
+            "Rhode Island Hospital",
+        ]
+
+    def test_verified_checkbox_only_appears_with_the_trauma_layer(self, app_with_hospitals):
+        assert not [c for c in app_with_hospitals.checkbox if "ACS-verified" in c.label]
+        at = _pick(app_with_hospitals, "Hospitals", "NICUs")
+        assert not [c for c in at.checkbox if "ACS-verified" in c.label]
+
+    def test_ring_style_and_data(self, app_with_hospitals: AppTest):
+        at = _pick(app_with_hospitals, "Hospitals", "Trauma centers")
+        next(c for c in at.checkbox if "ACS-verified" in c.label).uncheck().run()
+        trauma = next(layer for layer in _layers(at) if layer["id"] == "trauma-centers")
+        assert trauma["stroked"] is True and trauma["pickable"] is True
+        assert trauma["radiusMinPixels"] < trauma["radiusMaxPixels"]
+        assert trauma["lineWidthMinPixels"] == 3
+        names = sorted(row["site"] for row in trauma["data"])
+        assert names == ["Phoenix Children's", "Rhode Island Hospital"]  # unplaced one is dropped
+        assert all(len(row["color"]) == 4 and len(row["fill"]) == 4 for row in trauma["data"])
+
+    def test_rings_follow_the_state_filter(self, app_with_hospitals: AppTest):
+        at = _pick(app_with_hospitals, "Hospitals", "Trauma centers")
+        at = _pick(at, "State", "RI", sidebar=True)
+        trauma = next(layer for layer in _layers(at) if layer["id"] == "trauma-centers")
+        assert [row["site"] for row in trauma["data"]] == ["Rhode Island Hospital"]
+
+    def test_a_state_with_hospitals_but_no_providers_still_draws_a_map(
+        self, app_with_hospitals: AppTest
+    ):
+        """Arizona before any Arizona provider run: hospitals alone should still show."""
+        at = _pick(app_with_hospitals, "Hospitals", "Trauma centers", "NICUs")
+        next(c for c in at.checkbox if "ACS-verified" in c.label).uncheck()
+        at = _pick(at, "State", "AZ", sidebar=True)
+        assert not at.exception
+        assert _metrics(at)["Providers"] == "0"
+        assert [layer["id"] for layer in _layers(at)] == ["trauma-centers", "nicu-centers"]
+
+    def test_state_filter_also_offers_states_that_only_have_hospitals(
+        self, app_with_hospitals: AppTest
+    ):
+        states = next(m for m in app_with_hospitals.sidebar.multiselect if m.label == "State")
+        assert "AZ" in states.options  # no AZ providers in the fixture, only AZ hospitals
+
+    def test_hover_text_uses_the_shared_tooltip_fields(self, app_with_hospitals: AppTest):
+        at = _pick(app_with_hospitals, "Hospitals", "NICUs")
+        deck = json.loads(at.get("deck_gl_json_chart")[0].proto.json)
+        nicu = next(layer for layer in deck["layers"] if layer["id"] == "nicu-centers")
+        (row,) = nicu["data"]
+        assert row["detail"] == "NICU level III - 40 beds"
+        assert row["address"] == "1400 S Dobson Rd, Mesa, AZ 85202"
+
+    def test_data_quality_tab_describes_the_hospital_layers(self, app_with_hospitals: AppTest):
+        assert "Hospital layers" in [s.value for s in app_with_hospitals.subheader]
+
+
+class TestHospitalPoints:
+    @pytest.fixture()
+    def hospitals(self) -> pd.DataFrame:
+        frame = pd.DataFrame(_hospital_rows(), columns=HOSPITAL_COLUMNS)
+        frame["nicu_beds"] = frame["nicu_beds"].astype("Int64")
+        return frame
+
+    def test_only_placed_hospitals_of_the_kind(self, dashboard: ModuleType, hospitals):
+        points = dashboard.hospital_points(hospitals, "trauma", [])
+        assert sorted(points["site"]) == ["Phoenix Children's", "Rhode Island Hospital"]
+
+    def test_verified_only_applies_to_trauma_but_not_nicu(self, dashboard: ModuleType, hospitals):
+        trauma = dashboard.hospital_points(hospitals, "trauma", [], verified_only=True)
+        assert trauma["site"].tolist() == ["Rhode Island Hospital"]
+        nicu = dashboard.hospital_points(hospitals, "nicu", [], verified_only=True)
+        assert nicu["site"].tolist() == ["Banner Desert"]  # NICUs carry no verification flag
+
+    def test_state_filter(self, dashboard: ModuleType, hospitals):
+        assert dashboard.hospital_points(hospitals, "trauma", ["AZ"])["site"].tolist() == [
+            "Phoenix Children's"
+        ]
+        assert dashboard.hospital_points(hospitals, "trauma", ["TX"]).empty
+
+    def test_detail_text(self, dashboard: ModuleType, hospitals):
+        by_site = dashboard.hospital_points(hospitals, "trauma", []).set_index("site")["detail"]
+        assert by_site["Rhode Island Hospital"] == "Trauma center, level I - ACS verified"
+        assert by_site["Phoenix Children's"] == "Trauma center, level not stated"
+
+    def test_ring_colours_come_from_the_level(self, dashboard: ModuleType, hospitals):
+        points = dashboard.hospital_points(hospitals, "trauma", []).set_index("site")
+        palette = dashboard.HOSPITAL_LAYERS["Trauma centers"]["palette"]
+        expected = dashboard.hex_to_rgba(palette["I"], 255)
+        assert points.loc["Rhode Island Hospital", "color"] == expected
+        assert points.loc["Rhode Island Hospital", "fill"][3] < 255  # tinted, not solid
+
+    def test_address_line_skips_missing_parts(self, dashboard: ModuleType):
+        row = pd.Series({"address": None, "city": "Phoenix", "state": "AZ", "zip": None})
+        assert dashboard.address_line(row) == "Phoenix, AZ"
+        row = pd.Series({"address": "1 Main St", "city": "Phoenix", "state": "AZ", "zip": "85016"})
+        assert dashboard.address_line(row) == "1 Main St, Phoenix, AZ 85016"
+
+
+def test_hospital_palettes_are_ordered_by_level_and_convert(dashboard: ModuleType):
+    for layer in dashboard.HOSPITAL_LAYERS.values():
+        for colour in layer["palette"].values():
+            assert len(dashboard.hex_to_rgba(colour)) == 4
+    assert list(dashboard.HOSPITAL_LAYERS["Trauma centers"]["palette"])[:2] == ["I", "II"]

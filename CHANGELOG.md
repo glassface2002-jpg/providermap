@@ -9,6 +9,19 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Trauma-center and NICU layers on the dashboard map.** New
+  `providermap build-hospital-data --trauma CSV --nicu CSV` geocodes the two
+  hospital directories into `dashboard/data/hospitals.parquet`. In the map tab a
+  "Hospitals" control draws tinted rings (coloured by level) beneath the provider
+  dots, so dots stay clickable. The rings follow the State filter, and the State
+  list now also offers states that have hospitals but no providers. Trauma
+  rings default to ACS-verified centers only, because the source's unverified
+  levels look inconsistent between states (79% of Arizona's listed as Level I,
+  against 10% in Texas). The Data quality tab reports placement precision and
+  which states a source lacks.
+- **City-centre fallback in the geocoder.** `providermap/geocode.py` now places an
+  address with no street or ZIP match at its city's centre (`precision="city"`),
+  after trying its ZIP code, using the same offline ZIP data.
 - **Map dots scale with zoom.** The dashboard's location map now uses deck.gl
   (`st.pydeck_chart`) instead of Plotly markers: dot radius is in real-world
   metres (area proportional to provider count) clamped between 4 and 24 px, so

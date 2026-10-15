@@ -1,7 +1,8 @@
 """ProviderMap dashboard: where providers practice, on an interactive map.
 
-Reads the snapshot written by ``providermap build-map-data`` (a Parquet file
-plus ``build_info.json``). Deliberately imports nothing from the pipeline, so
+Reads the snapshots written by ``providermap build-map-data`` (providers, plus
+``build_info.json``) and ``providermap build-hospital-data`` (optional trauma-
+centre and NICU layers). Deliberately imports nothing from the pipeline, so
 it deploys with just streamlit, plotly, pydeck, pandas and pyarrow.
 
 Run locally:  streamlit run dashboard/app.py
@@ -46,10 +47,36 @@ TABLE_COLUMNS = [
     "site_confidence",
 ]
 SNAPSHOT_FILES = ("providers.parquet", "build_info.json")
+HOSPITAL_FILE = "hospitals.parquet"
 MAP_STYLE = "carto-positron"  # density view; the location map uses pydeck's matching "light"
 LAYER_ID = "locations"
 DEFAULT_COLOR = COLORS[NOT_ASSESSED]
 DOT_ALPHA = 200
+
+# Hospital layers (drawn as rings beneath the provider dots). Palettes run darkest = highest level.
+NOT_STATED = "Not stated"
+HOSPITAL_LAYERS = {
+    "Trauma centers": {
+        "kind": "trauma",
+        "title": "Trauma level",
+        "palette": {
+            "I": "#7f1d1d",
+            "II": "#b91c1c",
+            "III": "#ef4444",
+            "IV": "#f87171",
+            "V": "#fca5a5",
+            NOT_STATED: "#9aa0a6",
+        },
+    },
+    "NICUs": {
+        "kind": "nicu",
+        "title": "NICU level",
+        "palette": {"IV": "#4c1d95", "III": "#7c3aed", "II": "#c4b5fd"},
+    },
+}
+HOSPITAL_RADIUS_M = 800
+HOSPITAL_MIN_PX = 9
+HOSPITAL_MAX_PX = 34
 
 # Dot size. The radius is in real-world metres (so dot area is proportional to the number of
 # providers and dots grow as you zoom in), clamped to a pixel range so they stay visible zoomed
@@ -74,18 +101,38 @@ def load_snapshot() -> tuple[pd.DataFrame, dict]:
     return _read_snapshot(str(DATA_DIR), newest)
 
 
-def sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
-    st.sidebar.header("Filters")
+@st.cache_data
+def _read_hospitals(path: str, modified_ns: int) -> pd.DataFrame:
+    return pd.read_parquet(path)  # `modified_ns` is a cache key, as in _read_snapshot
 
-    def pick(label: str, column: str, order: list[str] | None = None) -> list[str]:
+
+def load_hospitals() -> pd.DataFrame | None:
+    """The hospital snapshot, or ``None`` when this deployment has no hospital layers."""
+    path = DATA_DIR / HOSPITAL_FILE
+    return _read_hospitals(str(path), path.stat().st_mtime_ns) if path.exists() else None
+
+
+def sidebar_filters(
+    df: pd.DataFrame, hospitals: pd.DataFrame | None
+) -> tuple[pd.DataFrame, list[str]]:
+    """Filtered providers, plus the chosen states (the hospital layers follow the State filter).
+
+    The State list also offers states that only have hospitals, so a state can be chosen before
+    any provider data for it exists."""
+    st.sidebar.header("Filters")
+    hospital_states = set(hospitals["state"].dropna()) if hospitals is not None else set()
+
+    def pick(
+        label: str, column: str, order: list[str] | None = None, extra: set[str] = frozenset()
+    ) -> list[str]:
         counts = df[column].value_counts()
-        options = order if order else counts.index.tolist()
-        options = [o for o in options if o in counts.index]
+        options = order if order else counts.index.tolist() + sorted(extra - set(counts.index))
+        options = [o for o in options if o in counts.index or o in extra]
         return st.sidebar.multiselect(label, options, help="Leave empty to include all.")
 
     chosen = {
         "dataset": pick("Dataset", "dataset"),
-        "state": pick("State", "state"),
+        "state": pick("State", "state", extra=hospital_states),
         "provider_type": pick("Provider type", "provider_type"),
         "specialty": pick("Specialty", "specialty"),
         "site_confidence": pick("Site confidence", "site_confidence", CONFIDENCE_ORDER),
@@ -95,7 +142,7 @@ def sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     for column, values in chosen.items():
         if values:
             mask &= df[column].isin(values)
-    return df[mask]
+    return df[mask], chosen["state"]
 
 
 def kpis(df: pd.DataFrame) -> None:
@@ -129,13 +176,17 @@ def aggregate_locations(mapped: pd.DataFrame) -> pd.DataFrame:
         site_confidence=("site_confidence", lambda s: top(s)),
     ).reset_index()
     out["location_id"] = out.index
+    out["detail"] = [
+        f"{n:,} provider{'s' if n != 1 else ''}" + (f" - {spec}" if spec else "")
+        for n, spec in zip(out["providers"], out["specialties"], strict=True)
+    ]
     out["radius_m"] = RADIUS_M_PER_SQRT_PROVIDER * out["providers"] ** 0.5
     # Largest first, so small dots draw on top of big ones and stay clickable.
     return out.sort_values("providers", ascending=False, ignore_index=True)
 
 
-def color_for(label: str) -> str:
-    return COLORS.get(label, DEFAULT_COLOR)
+def color_for(label: str, palette: dict[str, str] = COLORS) -> str:
+    return palette.get(label, DEFAULT_COLOR)
 
 
 def hex_to_rgba(hex_color: str, alpha: int = DOT_ALPHA) -> list[int]:
@@ -144,13 +195,73 @@ def hex_to_rgba(hex_color: str, alpha: int = DOT_ALPHA) -> list[int]:
     return [int(digits[i : i + 2], 16) for i in (0, 2, 4)] + [alpha]
 
 
-def legend_markdown(labels: list[str]) -> str:
-    """Coloured-dot legend (deck.gl has none). Known labels first, in COLORS order."""
-    known = [label for label in COLORS if label in labels]
-    unknown = sorted(set(labels) - set(COLORS))
+def legend_markdown(labels: list[str], palette: dict[str, str] = COLORS) -> str:
+    """Coloured-dot legend (deck.gl has none). Known labels first, in palette order."""
+    known = [label for label in palette if label in labels]
+    unknown = sorted(set(labels) - set(palette))
     return "&nbsp;&nbsp;&nbsp;".join(
-        f"<span style='color:{color_for(label)}'>&#9679;</span> {html.escape(label)}"
+        f"<span style='color:{color_for(label, palette)}'>&#9679;</span> {html.escape(label)}"
         for label in known + unknown
+    )
+
+
+def address_line(row: pd.Series) -> str:
+    """'320 E South St, Orlando, FL 32801' from whichever parts the source gave."""
+    place = " ".join(part for part in (row["state"], row["zip"]) if isinstance(part, str))
+    parts = [row["address"], row["city"], place]
+    return ", ".join(part for part in parts if isinstance(part, str) and part)
+
+
+def hospital_points(
+    hospitals: pd.DataFrame, kind: str, states: list[str], verified_only: bool = False
+) -> pd.DataFrame:
+    """Rows for one hospital layer, ready for deck.gl: placed hospitals of that kind (in the
+    chosen states, if any) with ring colours and the text shown on hover. ``verified_only``
+    keeps just the ACS-verified trauma centres (it has no effect on NICUs)."""
+    palette = next(c["palette"] for c in HOSPITAL_LAYERS.values() if c["kind"] == kind)
+    rows = hospitals[(hospitals["kind"] == kind) & hospitals["lat"].notna()]
+    if states:
+        rows = rows[rows["state"].isin(states)]
+    if verified_only and kind == "trauma":
+        rows = rows[rows["acs_verified"] == "Yes"]
+
+    def detail(row: pd.Series) -> str:
+        if kind == "trauma":
+            level = "level not stated" if row["level"] == NOT_STATED else f"level {row['level']}"
+            verified = " - ACS verified" if row["acs_verified"] == "Yes" else ""
+            return f"Trauma center, {level}{verified}"
+        beds = f" - {int(row['nicu_beds'])} beds" if pd.notna(row["nicu_beds"]) else ""
+        return f"NICU level {row['level']}{beds}"
+
+    return pd.DataFrame(
+        {
+            "lat": rows["lat"],
+            "lon": rows["lon"],
+            "level": rows["level"],
+            "site": rows["name"],
+            "address": rows.apply(address_line, axis=1),
+            "detail": rows.apply(detail, axis=1),
+            "color": rows["level"].map(lambda v: hex_to_rgba(color_for(v, palette), 255)),
+            "fill": rows["level"].map(lambda v: hex_to_rgba(color_for(v, palette), 45)),
+        }
+    ).reset_index(drop=True)
+
+
+def hospital_layer(points: pd.DataFrame, kind: str) -> pdk.Layer:
+    """Hollow, tinted rings with a thick outline, sized in metres like the provider dots."""
+    return pdk.Layer(
+        "ScatterplotLayer",
+        id=f"{kind}-centers",
+        data=points,
+        get_position=["lon", "lat"],
+        get_radius=HOSPITAL_RADIUS_M,
+        radius_min_pixels=HOSPITAL_MIN_PX,
+        radius_max_pixels=HOSPITAL_MAX_PX,
+        get_fill_color="fill",
+        get_line_color="color",
+        stroked=True,
+        line_width_min_pixels=3,
+        pickable=True,
     )
 
 
@@ -169,48 +280,13 @@ def selected_location_ids(event: Any) -> list[int]:
     return [obj["location_id"] for obj in event.selection.objects.get(LAYER_ID, [])]
 
 
-def map_tab(df: pd.DataFrame) -> None:
-    mapped = df.dropna(subset=["lat", "lon"])
-    if mapped.empty:
-        st.info("No mappable providers match the current filters.")
-        return
-
-    left, right = st.columns([1, 1])
-    view = left.radio("View", ["Locations", "Density"], horizontal=True)
-    center = {"lat": mapped["lat"].mean(), "lon": mapped["lon"].mean()}
-    zoom = zoom_for(mapped)
-
-    if view == "Density":
-        fig = px.density_map(
-            mapped, lat="lat", lon="lon", radius=12, center=center, zoom=zoom, map_style=MAP_STYLE
-        )
-        fig.update_layout(
-            margin={"l": 0, "r": 0, "t": 0, "b": 0}, height=600, coloraxis_showscale=False
-        )
-        st.plotly_chart(fig, width="stretch")
-        st.caption("Density of providers; brighter means more providers nearby.")
-        return
-
-    color_by = right.radio("Color by", ["Provider type", "Site confidence"], horizontal=True)
-    color_col = "provider_type" if color_by == "Provider type" else "site_confidence"
-    locations = aggregate_locations(mapped)
-    locations["color"] = locations[color_col].map(lambda label: hex_to_rgba(color_for(label)))
-    st.markdown(legend_markdown(locations[color_col].unique().tolist()), unsafe_allow_html=True)
-    layer = pdk.Layer(
+def provider_layer(locations: pd.DataFrame) -> pdk.Layer:
+    """Provider dots: radius in metres (grows with zoom), clamped to a pixel range."""
+    return pdk.Layer(
         "ScatterplotLayer",
         id=LAYER_ID,
         data=locations[
-            [
-                "lat",
-                "lon",
-                "location_id",
-                "radius_m",
-                "color",
-                "site",
-                "address",
-                "providers",
-                "specialties",
-            ]
+            ["lat", "lon", "location_id", "radius_m", "color", "site", "address", "detail"]
         ],
         get_position=["lon", "lat"],
         get_radius="radius_m",
@@ -223,19 +299,95 @@ def map_tab(df: pd.DataFrame) -> None:
         pickable=True,
         auto_highlight=True,
     )
+
+
+def map_tab(df: pd.DataFrame, hospitals: pd.DataFrame | None, states: list[str]) -> None:
+    mapped = df.dropna(subset=["lat", "lon"])
+    columns = st.columns(3)
+    view = columns[0].radio("View", ["Locations", "Density"], horizontal=True)
+
+    if view == "Density":
+        if mapped.empty:
+            st.info("No mappable providers match the current filters.")
+            return
+        fig = px.density_map(
+            mapped,
+            lat="lat",
+            lon="lon",
+            radius=12,
+            center={"lat": mapped["lat"].mean(), "lon": mapped["lon"].mean()},
+            zoom=zoom_for(mapped),
+            map_style=MAP_STYLE,
+        )
+        fig.update_layout(
+            margin={"l": 0, "r": 0, "t": 0, "b": 0}, height=600, coloraxis_showscale=False
+        )
+        st.plotly_chart(fig, width="stretch")
+        st.caption("Density of providers; brighter means more providers nearby.")
+        return
+
+    color_by = columns[1].radio("Color by", ["Provider type", "Site confidence"], horizontal=True)
+    color_col = "provider_type" if color_by == "Provider type" else "site_confidence"
+    shown = []
+    if hospitals is not None:
+        shown = columns[2].multiselect(
+            "Hospitals",
+            list(HOSPITAL_LAYERS),
+            help="Rings drawn beneath the provider dots. They follow the State filter.",
+        )
+    verified_only = False
+    if "Trauma centers" in shown:
+        verified_only = columns[2].checkbox(
+            "ACS-verified trauma centers only",
+            value=True,
+            help="Levels without ACS verification are the source's own and look inconsistent "
+            "between states, so they are hidden by default.",
+        )
+
+    layers: list[pdk.Layer] = []  # bottom to top: hospital rings first, provider dots last
+    legends: list[str] = []
+    extent: list[pd.DataFrame] = []
+    for name in shown:
+        spec = HOSPITAL_LAYERS[name]
+        points = hospital_points(hospitals, spec["kind"], states, verified_only)
+        if points.empty:
+            continue
+        layers.append(hospital_layer(points, spec["kind"]))
+        extent.append(points[["lat", "lon"]])
+        legends.append(
+            f"**{spec['title']}** (rings) "
+            + legend_markdown(points["level"].unique().tolist(), spec["palette"])
+        )
+
+    locations = None
+    if not mapped.empty:
+        locations = aggregate_locations(mapped)
+        locations["color"] = locations[color_col].map(lambda label: hex_to_rgba(color_for(label)))
+        layers.append(provider_layer(locations))
+        extent.append(mapped[["lat", "lon"]])
+        legends.insert(0, legend_markdown(locations[color_col].unique().tolist()))
+
+    if not layers:
+        hint = " Turn on a hospital layer to see hospitals." if hospitals is not None else ""
+        st.info("No mappable providers match the current filters." + hint)
+        return
+
+    for legend in legends:
+        st.markdown(legend, unsafe_allow_html=True)
+    frame = pd.concat(extent)
     deck = pdk.Deck(
-        layers=[layer],
+        layers=layers,
         initial_view_state=pdk.ViewState(
-            latitude=center["lat"], longitude=center["lon"], zoom=zoom
+            latitude=frame["lat"].mean(), longitude=frame["lon"].mean(), zoom=zoom_for(frame)
         ),
         map_style="light",
-        tooltip={"text": "{site}\n{address}\nProviders: {providers}\n{specialties}"},
+        tooltip={"text": "{site}\n{address}\n{detail}"},
     )
     event = st.pydeck_chart(
         deck, height=600, on_select="rerun", selection_mode="multi-object", key="provider_map"
     )
 
-    selected = selected_location_ids(event)
+    selected = selected_location_ids(event) if locations is not None else []
     if not selected:
         st.caption(
             "Dot size = number of providers at that location, and dots grow as you zoom in. "
@@ -338,7 +490,36 @@ def find_tab(df: pd.DataFrame) -> None:
         st.link_button("Public directory profile", row["profile_url"])
 
 
-def quality_tab(info: dict) -> None:
+def hospital_quality(hospitals: pd.DataFrame) -> None:
+    st.subheader("Hospital layers")
+    rows = []
+    for name, spec in HOSPITAL_LAYERS.items():
+        part = hospitals[hospitals["kind"] == spec["kind"]]
+        counts = part["geocode_precision"].value_counts().to_dict()
+        rows.append(
+            {"layer": name, "hospitals": len(part), "states": part["state"].nunique()}
+            | {f"{precision} match": n for precision, n in counts.items()}
+        )
+    st.dataframe(pd.DataFrame(rows).fillna(0), hide_index=True, width="stretch")
+    trauma = hospitals[hospitals["kind"] == "trauma"]
+    st.markdown(
+        "Trauma centers and NICUs come from two third-party directories (named in the headers of "
+        "the source files: verifiedtraumacenters.com and neonatologysolutions.com). A hospital in "
+        "both appears once in each layer, and a source is not checked against the other.\n\n"
+        f"- Only {int((trauma['acs_verified'] == 'Yes').sum()):,} of {len(trauma):,} trauma centers "
+        "are marked ACS-verified in the source. Levels without verification are the source's own "
+        "and look inconsistent between states, so the map shows verified centers only unless you "
+        "untick the box.\n"
+        f"- '{NOT_STATED}' means the source gave no trauma level (often children's hospitals)."
+    )
+    everywhere = set(hospitals["state"])
+    for name, spec in HOSPITAL_LAYERS.items():
+        absent = sorted(everywhere - set(hospitals.loc[hospitals["kind"] == spec["kind"], "state"]))
+        if absent:
+            st.caption(f"{name}: the source has no hospitals for {', '.join(absent)}.")
+
+
+def quality_tab(info: dict, hospitals: pd.DataFrame | None) -> None:
     st.write(
         f"Snapshot built {info['built_at'][:16].replace('T', ' ')} UTC from {info['total_providers']:,} provider records."
     )
@@ -373,6 +554,8 @@ def quality_tab(info: dict) -> None:
         "appear under different names across datasets (for example 'Internal Medicine' and "
         "'Internal Medicine Physician'). They are not merged."
     )
+    if hospitals is not None:
+        hospital_quality(hospitals)
     st.caption(
         "Public NPI registry and provider-directory information only. No patient data or PHI."
     )
@@ -385,19 +568,20 @@ def main() -> None:
         "Where providers actually practice: public provider directory and NPI registry data on a map."
     )
     df, info = load_snapshot()
-    filtered = sidebar_filters(df)
+    hospitals = load_hospitals()
+    filtered, states = sidebar_filters(df, hospitals)
     kpis(filtered)
     map_t, insights_t, find_t, quality_t = st.tabs(
         ["Map", "Insights", "Find a provider", "Data quality"]
     )
     with map_t:
-        map_tab(filtered)
+        map_tab(filtered, hospitals, states)
     with insights_t:
         insights_tab(filtered)
     with find_t:
         find_tab(df)
     with quality_t:
-        quality_tab(info)
+        quality_tab(info, hospitals)
 
 
 if __name__ == "__main__":
