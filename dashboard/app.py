@@ -356,6 +356,8 @@ def quality_tab(info: dict) -> None:
         "- **address**: street-level match from the US Census geocoder.\n"
         "- **zip**: the Census could not match the street, so the point is the centre of the ZIP code. "
         "Treat as approximate; providers in one ZIP stack on one point.\n"
+        "- **city**: no street or ZIP match, so the point is the centre of the city. "
+        "Roughly right for the city, not for the building.\n"
         "- **none**: no usable address. Counted in totals and charts, absent from the map.\n"
     )
     st.subheader("Site confidence")

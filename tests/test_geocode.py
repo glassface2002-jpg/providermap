@@ -14,6 +14,8 @@ from providermap.geocode import (
     Address,
     GeoResult,
     address_key,
+    city_centroid,
+    fallback_location,
     geocode_addresses,
     parse_batch_response,
     strip_unit,
@@ -114,6 +116,41 @@ class TestZipCentroid:
     @pytest.mark.parametrize("bad", [None, "", "0290", "abcde", "00000"])
     def test_unusable_zip(self, bad):
         assert zip_centroid(bad) is None
+
+
+class TestCityCentroid:
+    def test_known_city_is_case_insensitive(self):
+        lat, lon = city_centroid("providence", " ri ")  # type: ignore[misc]
+        assert 41.7 < lat < 42.0
+        assert -71.6 < lon < -71.3
+        assert city_centroid("PROVIDENCE", "RI") == city_centroid("Providence", "RI")
+
+    @pytest.mark.parametrize(
+        ("city", "state"), [("Nowheresville", "RI"), (None, "RI"), ("Providence", None), ("", "")]
+    )
+    def test_unknown_or_missing_is_none(self, city, state):
+        assert city_centroid(city, state) is None
+
+    def test_same_city_name_in_two_states_stays_separate(self):
+        assert city_centroid("Springfield", "IL") != city_centroid("Springfield", "MA")
+
+
+class TestFallbackLocation:
+    def test_zip_beats_city(self):
+        result = fallback_location(Address(None, "Providence", "RI", "02904"))
+        assert result.precision == "zip"
+
+    def test_city_when_there_is_no_zip(self):
+        result = fallback_location(Address("1 Main St", "Providence", "RI", None))
+        assert result.precision == "city"
+        assert result.lat is not None and result.county_fips is None
+
+    def test_nothing_usable_is_unresolved(self):
+        assert fallback_location(Address(None, None, None, None)).precision == "none"
+        assert (
+            fallback_location(Address("1 Main St", "Nowheresville", "RI", "00000")).precision
+            == "none"
+        )
 
 
 class TestGeocodeAddresses:

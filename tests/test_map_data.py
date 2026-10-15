@@ -152,9 +152,16 @@ class TestBuildSnapshot:
 
     def test_row_without_usable_address_is_kept_but_unmapped(self, exports):
         df = build_snapshot(exports, fake_geocoder).set_index("name")
-        row = df.loc["No Zip"]
-        assert row["geocode_precision"] == "none"
-        assert pd.isna(row["lat"]) and pd.isna(row["lon"])
+        row = df.loc["No Zip"]  # no ZIP, so no street-level key, but its city is known
+        assert row["geocode_precision"] == "city"
+        assert row["lat"] == pytest.approx(41.82, abs=0.2)
+
+    def test_row_with_nothing_to_place_it_by_stays_unmapped(self, db, tmp_path):
+        nowhere = dataclasses.replace(_no_zip(), city=None, state=None)
+        path = _export(db, tmp_path / "nowhere.xlsx", [nowhere])
+        df = build_snapshot({"x": path}, fake_geocoder)
+        assert df["geocode_precision"].tolist() == ["none"]
+        assert pd.isna(df["lat"].iloc[0]) and pd.isna(df["lon"].iloc[0])
 
     def test_geocoder_receives_every_address_once_across_datasets(self, exports):
         calls: list[list[Address]] = []
@@ -182,11 +189,11 @@ class TestWriteSnapshot:
         assert info["total_providers"] == 3
         assert info["datasets"]["AdventHealth"] == {
             "providers": 2,
-            "geocode_precision": {"address": 1, "zip": 0, "none": 1},
+            "geocode_precision": {"address": 1, "zip": 0, "city": 1, "none": 0},
         }
         assert info["datasets"]["Rhode Island"]["geocode_precision"]["zip"] == 1
 
-    def test_build_info_counts_all_three_precisions(self, exports):
+    def test_build_info_counts_every_precision(self, exports):
         info = build_info(build_snapshot(exports, fake_geocoder))
         total = sum(sum(d["geocode_precision"].values()) for d in info["datasets"].values())
         assert total == info["total_providers"]

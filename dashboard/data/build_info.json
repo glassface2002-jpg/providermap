@@ -1,5 +1,5 @@
 {
-  "built_at": "2026-10-13T21:00:03+00:00",
+  "built_at": "2026-10-15T22:19:40+00:00",
   "total_providers": 18585,
   "datasets": {
     "AdventHealth": {
@@ -7,7 +7,8 @@
       "geocode_precision": {
         "address": 9518,
         "zip": 631,
-        "none": 2
+        "city": 2,
+        "none": 0
       }
     },
     "Rhode Island": {
@@ -15,6 +16,7 @@
       "geocode_precision": {
         "address": 7832,
         "zip": 602,
+        "city": 0,
         "none": 0
       }
     }

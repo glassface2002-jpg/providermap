@@ -22,7 +22,7 @@ from typing import Any
 
 import pandas as pd
 
-from .geocode import UNRESOLVED, Address, GeoResult, address_key
+from .geocode import PRECISIONS, Address, GeoResult, address_key, fallback_location
 
 PARQUET_NAME = "providers.parquet"
 INFO_NAME = "build_info.json"
@@ -71,7 +71,7 @@ def load_export(label: str, path: Path) -> pd.DataFrame:
 
 
 def add_coordinates(df: pd.DataFrame, geocoder: Geocoder) -> pd.DataFrame:
-    """Return ``df`` plus :data:`GEO_COLUMNS`. Unmappable rows are kept, marked ``none``."""
+    """Return ``df`` plus :data:`GEO_COLUMNS`. Unplaceable rows are kept, marked ``none``."""
     addresses = [
         Address(*row) for row in zip(df["address"], df["city"], df["state"], df["zip"], strict=True)
     ]
@@ -79,7 +79,9 @@ def add_coordinates(df: pd.DataFrame, geocoder: Geocoder) -> pd.DataFrame:
     results = []
     for addr in addresses:
         key = address_key(addr)
-        results.append(found.get(key, UNRESOLVED) if key else UNRESOLVED)
+        match = found.get(key) if key else None
+        # No street-level key (missing street or ZIP): still place it approximately if we can.
+        results.append(match or fallback_location(addr))
 
     out = df.copy()
     out["lat"] = [r.lat for r in results]
@@ -103,7 +105,7 @@ def build_info(df: pd.DataFrame) -> dict[str, Any]:
         counts = group["geocode_precision"].value_counts()
         datasets[str(label)] = {
             "providers": len(group),
-            "geocode_precision": {p: int(counts.get(p, 0)) for p in ("address", "zip", "none")},
+            "geocode_precision": {p: int(counts.get(p, 0)) for p in PRECISIONS},
         }
     return {
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

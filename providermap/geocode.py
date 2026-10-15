@@ -10,12 +10,13 @@ addresses into coordinates:
    :data:`CHUNK_SIZE` per request, and the answers are written to a CSV cache
    after every chunk - a failed run resumes where it stopped, and a rerun
    sends nothing it already knows (including known non-matches).
-3. An address the Census cannot match falls back to its ZIP-code centroid,
-   offline, and is labelled ``precision="zip"`` so the dashboard can say so.
-   An address with no usable ZIP is ``precision="none"`` and is not mapped.
+3. An address the Census cannot match falls back, offline, to its ZIP-code
+   centre (``precision="zip"``), then to its city's centre
+   (``precision="city"``), so the dashboard can say how approximate it is.
+   An address with neither is ``precision="none"`` and is not mapped.
 
-The ZIP fallback is applied on every call and never cached: it is free and
-offline, and it must not mask a later Census match.
+The ZIP/city fallback is applied on every call and never cached: it is free
+and offline, and it must not mask a later Census match.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import csv
 import io
 import re
 from collections.abc import Iterable
+from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
 
@@ -39,7 +41,9 @@ CHUNK_SIZE = 10_000  # the Census batch endpoint's documented per-request maximu
 
 PRECISION_ADDRESS = "address"
 PRECISION_ZIP = "zip"
+PRECISION_CITY = "city"
 PRECISION_NONE = "none"
+PRECISIONS = (PRECISION_ADDRESS, PRECISION_ZIP, PRECISION_CITY, PRECISION_NONE)
 
 _CACHE_FIELDS = ["key", "lat", "lon", "county_fips"]
 
@@ -99,6 +103,61 @@ def zip_centroid(zipcode: str | None) -> tuple[float, float] | None:
         return float(matches[0]["lat"]), float(matches[0]["long"])
     except (KeyError, ValueError):
         return None
+
+
+_CityKey = tuple[str, str]
+_Point = tuple[float, float]
+
+
+def _mean_points(sums: dict[_CityKey, list[float]]) -> dict[_CityKey, _Point]:
+    return {key: (lat / n, lon / n) for key, (lat, lon, n) in sums.items()}
+
+
+@lru_cache(maxsize=1)
+def _city_centres() -> tuple[dict[_CityKey, _Point], dict[_CityKey, _Point]]:
+    """(STATE, lowercase city) -> mean (lat, lon) of that city's ZIP centres, offline.
+
+    Two indexes: ZIPs whose primary city is that name, and ZIPs that only list it as an
+    acceptable alternative. The second is a last resort, since an alternative name can span
+    several towns.
+    """
+    primary: dict[_CityKey, list[float]] = {}
+    alternative: dict[_CityKey, list[float]] = {}
+    for z in zipcodes.list_all():
+        try:
+            lat, lon = float(z["lat"]), float(z["long"])
+        except (KeyError, ValueError):
+            continue
+        for sums, names in (
+            (primary, [z["city"]]),
+            (alternative, z.get("acceptable_cities") or []),
+        ):
+            for name in names:
+                total = sums.setdefault((z["state"], name.lower()), [0.0, 0.0, 0.0])
+                total[0] += lat
+                total[1] += lon
+                total[2] += 1
+    return _mean_points(primary), _mean_points(alternative)
+
+
+def city_centroid(city: str | None, state: str | None) -> tuple[float, float] | None:
+    """``(lat, lon)`` of a city's centre (case-insensitive), from the offline ZIP data."""
+    if not city or not state:
+        return None
+    key = (state.strip().upper(), city.strip().lower())
+    primary, alternative = _city_centres()
+    return primary.get(key) or alternative.get(key)
+
+
+def fallback_location(address: Address) -> GeoResult:
+    """Approximate position when there is no street-level match: ZIP centre, else city centre."""
+    zip_point = zip_centroid(address.zipcode)
+    if zip_point is not None:
+        return GeoResult(zip_point[0], zip_point[1], None, PRECISION_ZIP)
+    city_point = city_centroid(address.city, address.state)
+    if city_point is not None:
+        return GeoResult(city_point[0], city_point[1], None, PRECISION_CITY)
+    return UNRESOLVED
 
 
 def parse_batch_response(text: str, ids: dict[str, str]) -> dict[str, GeoResult]:
@@ -191,9 +250,5 @@ def geocode_addresses(
     results: dict[str, GeoResult] = {}
     for key, addr in unique.items():
         result = cache[key]
-        if result.precision == PRECISION_NONE:
-            centroid = zip_centroid(addr.zipcode)
-            if centroid is not None:
-                result = GeoResult(centroid[0], centroid[1], None, PRECISION_ZIP)
-        results[key] = result
+        results[key] = fallback_location(addr) if result.precision == PRECISION_NONE else result
     return results
