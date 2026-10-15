@@ -411,6 +411,49 @@ providermap query "Menezes"
 
 ---
 
+## Running a single state (Cigna FHIR provider directory)
+
+`providermap ingest-providers` pulls one state's providers from Cigna's public
+FHIR Provider Directory - no API key or login is needed. Give the run its own
+database, so its export contains only that state, and turn on the disk-backed
+spool, which is what keeps memory small on a big state (without it, the smallest
+state measured 6.07 GB peak RAM; see `config.example.yaml`). Copy
+`config.example.yaml` to e.g. `config.az.yaml` and change these existing keys
+(do not add duplicates):
+
+```yaml
+database:
+  path: "database/arizona.db"            # its own database
+exports:
+  dir: "exports/arizona"
+providers:
+  cigna_fhir_state: "AZ"                 # null would mean "all states" - do not leave it
+  cigna_fhir_state_scoped_spool: true    # disk-backed, low-RAM mode
+  resource_spool_path: "database/az_spool.db"
+  checkpoint_path: "database/az_checkpoint.db"   # makes the run resumable
+```
+
+```bash
+providermap --config config.az.yaml ingest-providers   # hours for a large state
+providermap --config config.az.yaml export             # writes exports/arizona/providers.xlsx
+```
+
+On Windows use `run.bat --config config.az.yaml ...`. If the run is interrupted,
+run the same command again and it resumes from the checkpoint. Keep the machine
+awake while it runs. The first phase walks the state's locations one page at a
+time, which Cigna's paging does not allow to be parallelised; the second phase
+can fetch several batches at once (`providers.cigna_fhir_max_concurrent_requests`,
+default 1, still limited by `cigna_fhir_requests_per_second`).
+
+For scale, the Rhode Island pilot made 1,686 requests in about 49 minutes
+(`adapters/providers/cigna_fhir/CONCURRENCY_DESIGN.md`), and Florida once ran over
+5 hours without finishing before the speed and memory fixes
+(`docs/adr/0001-national-discovery-strategy.md`). To put the result on the map,
+pass the export to the dashboard builder, e.g.
+`providermap build-map-data --input "Arizona=exports/arizona/providers.xlsx"`.
+
+---
+
 ## Map dashboard
 
 `dashboard/app.py` is a [Streamlit](https://streamlit.io) app that shows
