@@ -26,6 +26,7 @@ from .geocode import PRECISIONS, Address, GeoResult, address_key, fallback_locat
 
 PARQUET_NAME = "providers.parquet"
 INFO_NAME = "build_info.json"
+HOSPITAL_PARQUET_NAME = "hospitals.parquet"
 
 EXPORT_SHEET = "Providers"
 NOT_ASSESSED = "Not assessed"  # run never computed this (e.g. site confidence)
@@ -50,6 +51,27 @@ EXPORT_COLUMNS = {
 GEO_COLUMNS = ["lat", "lon", "county_fips", "geocode_precision"]
 SNAPSHOT_COLUMNS = ["dataset", *EXPORT_COLUMNS.values(), *GEO_COLUMNS]
 
+# Hospital layers (trauma centres and NICUs): one row per hospital per kind. A hospital that is
+# both appears twice, once per kind, so each layer stands alone and no cross-file name matching
+# is needed.
+KIND_TRAUMA = "trauma"
+KIND_NICU = "nicu"
+NOT_STATED = "Not stated"  # a trauma-centre row with no level (mostly children's hospitals)
+HOSPITAL_COLUMNS = [
+    "kind",
+    "name",
+    "address",
+    "city",
+    "state",
+    "zip",
+    "level",
+    "nicu_beds",
+    "acs_verified",
+    "lat",
+    "lon",
+    "geocode_precision",
+]
+
 Geocoder = Callable[[list[Address]], dict[str, GeoResult]]
 
 
@@ -67,6 +89,57 @@ def load_export(label: str, path: Path) -> pd.DataFrame:
     df["site_confidence"] = df["site_confidence"].fillna(NOT_ASSESSED)
     df["accepting_new_patients"] = df["accepting_new_patients"].fillna(UNKNOWN)
     df.insert(0, "dataset", label)
+    return df
+
+
+def _read_hospital_csv(path: Path, columns: dict[str, str]) -> pd.DataFrame:
+    """Read a hospital CSV into clean, lower-case-named string columns (blanks become None)."""
+    df = pd.read_csv(path, encoding="utf-8-sig", usecols=list(columns), dtype=str)
+    df = df.rename(columns=columns)
+    for column in df.columns:
+        text = df[column].str.strip()
+        df[column] = text.where(text.notna() & (text != ""), None)
+    df["state"] = df["state"].str.upper()
+    return df
+
+
+def load_trauma_centers(path: Path) -> pd.DataFrame:
+    df = _read_hospital_csv(
+        path,
+        {
+            "Hospital Name": "name",
+            "Address": "address",
+            "City": "city",
+            "State Abbrev": "state",
+            "ZIP": "zip",
+            "Trauma Level": "level",
+            "ACS Verified": "acs_verified",
+        },
+    )
+    df["kind"] = KIND_TRAUMA
+    df["level"] = df["level"].str.upper().fillna(NOT_STATED)
+    df["acs_verified"] = df["acs_verified"].map({"1": "Yes", "0": "No"})
+    df["nicu_beds"] = pd.Series(pd.NA, index=df.index, dtype="Int64")
+    return df
+
+
+def load_nicu_centers(path: Path) -> pd.DataFrame:
+    df = _read_hospital_csv(
+        path,
+        {
+            "Hospital Name": "name",
+            "Address": "address",
+            "City": "city",
+            "State Abbrev": "state",
+            "ZIP": "zip",
+            "NICU Level": "level",
+            "NICU Beds": "nicu_beds",
+        },
+    )
+    df["kind"] = KIND_NICU
+    df["level"] = df["level"].str.upper()
+    df["nicu_beds"] = pd.to_numeric(df["nicu_beds"], errors="coerce").astype("Int64")
+    df["acs_verified"] = None
     return df
 
 
@@ -98,6 +171,14 @@ def build_snapshot(inputs: Mapping[str, Path], geocoder: Geocoder) -> pd.DataFra
     return add_coordinates(combined, geocoder)[SNAPSHOT_COLUMNS]
 
 
+def build_hospital_snapshot(trauma_csv: Path, nicu_csv: Path, geocoder: Geocoder) -> pd.DataFrame:
+    """Load the trauma-centre and NICU CSVs, geocode them together, return the snapshot."""
+    combined = pd.concat(
+        [load_trauma_centers(trauma_csv), load_nicu_centers(nicu_csv)], ignore_index=True
+    )
+    return add_coordinates(combined, geocoder)[HOSPITAL_COLUMNS]
+
+
 def build_info(df: pd.DataFrame) -> dict[str, Any]:
     """Provenance for the Data Quality tab: row counts and geocode precision per dataset."""
     datasets: dict[str, Any] = {}
@@ -112,6 +193,11 @@ def build_info(df: pd.DataFrame) -> dict[str, Any]:
         "total_providers": len(df),
         "datasets": datasets,
     }
+
+
+def write_hospital_snapshot(df: pd.DataFrame, out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_dir / HOSPITAL_PARQUET_NAME, index=False)
 
 
 def write_snapshot(df: pd.DataFrame, out_dir: Path) -> None:

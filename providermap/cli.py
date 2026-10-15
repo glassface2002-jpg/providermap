@@ -270,6 +270,27 @@ def cmd_build_map_data(config: Config, args: argparse.Namespace) -> None:
     print()
 
 
+def cmd_build_hospital_data(config: Config, args: argparse.Namespace) -> None:
+    from .geocode import census_client, geocode_addresses
+    from .map_data import build_hospital_snapshot, write_hospital_snapshot
+
+    cache_path = Path(config.cache.dir) / "geocode.csv"
+    with census_client(config.politeness.user_agent) as client:
+        snapshot = build_hospital_snapshot(
+            Path(args.trauma),
+            Path(args.nicu),
+            lambda addrs: geocode_addresses(addrs, cache_path, client),
+        )
+    write_hospital_snapshot(snapshot, Path(args.out))
+
+    print(f"\nWrote {len(snapshot)} hospital rows to {args.out}")
+    for kind, group in snapshot.groupby("kind"):
+        print(
+            f"  {kind}: {len(group)} hospitals, geocoded {group['geocode_precision'].value_counts().to_dict()}"
+        )
+    print()
+
+
 def cmd_refresh_osm_cache(config: Config, args: argparse.Namespace) -> None:
     """Rebuild the local OSM hospital cache ``enrich-organizations`` reads
     (see ``providermap/osm_hospitals.py``). Heavy and explicit - downloads a
@@ -1212,6 +1233,7 @@ def build_parser() -> argparse.ArgumentParser:
             "    providermap export-organizations   # write organizations.xlsx\n\n"
             "Map dashboard (see dashboard/):\n"
             '    providermap build-map-data --input "AdventHealth=providers.xlsx"\n'
+            "    providermap build-hospital-data --trauma trauma.csv --nicu nicu.csv\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1352,6 +1374,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", default="dashboard/data", help="output directory (default: dashboard/data)"
     )
 
+    p = sub.add_parser(
+        "build-hospital-data",
+        help="geocode trauma-centre and NICU CSVs into the map dashboard's hospital layers",
+    )
+    p.add_argument("--trauma", required=True, metavar="CSV", help="trauma_centers.csv")
+    p.add_argument("--nicu", required=True, metavar="CSV", help="nicu_centers.csv")
+    p.add_argument(
+        "--out", default="dashboard/data", help="output directory (default: dashboard/data)"
+    )
+
     sub.add_parser("export-organizations", help="write organizations.xlsx")
 
     p = sub.add_parser(
@@ -1397,6 +1429,7 @@ def main(argv: list[str] | None = None) -> None:
         "trial",
         "enrich-organizations",
         "build-map-data",
+        "build-hospital-data",
     } and not getattr(args, "test", False)
     if live:
         check_user_agent(config)
@@ -1433,6 +1466,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_export_organizations(config, args)
     elif args.cmd == "build-map-data":
         cmd_build_map_data(config, args)
+    elif args.cmd == "build-hospital-data":
+        cmd_build_hospital_data(config, args)
     elif args.cmd == "refresh-osm-cache":
         cmd_refresh_osm_cache(config, args)
 

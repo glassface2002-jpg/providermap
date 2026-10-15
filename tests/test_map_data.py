@@ -21,13 +21,18 @@ from providermap.exporter import export_providers
 from providermap.geocode import Address, GeoResult, address_key
 from providermap.map_data import (
     EXPORT_COLUMNS,
+    HOSPITAL_COLUMNS,
+    HOSPITAL_PARQUET_NAME,
     NOT_ASSESSED,
+    NOT_STATED,
     PARQUET_NAME,
     SNAPSHOT_COLUMNS,
     UNKNOWN,
+    build_hospital_snapshot,
     build_info,
     build_snapshot,
     load_export,
+    write_hospital_snapshot,
     write_snapshot,
 )
 from providermap.models import Confidence, Provider, ProviderType
@@ -208,3 +213,76 @@ class TestCliInputValidation:
         with pytest.raises(SystemExit) as exc:
             cmd_build_map_data(config, Namespace(input=specs, out="unused"))
         assert exc.value.code == 2
+
+
+# Shaped exactly like the real files: UTF-8 BOM, extra columns, mixed case, blanks.
+TRAUMA_CSV = (
+    "\ufeffHospital Name,Address,City,State,State Abbrev,ZIP,County,Phone,Trauma Level,ACS Verified\n"
+    "Huntsville Hospital,101 SIVLEY RD,Huntsville,Alabama,al,35801,MADISON,(256) 265-1000,i,1\n"
+    "Children's of Alabama,1600 SEVENTH AVENUE SOUTH,Birmingham,Alabama,AL,35233,JEFFERSON,,,0\n"
+    "Providence Hospital,,Mobile,Alabama,AL,,,,II,0\n"
+)
+NICU_CSV = (
+    "\ufeffHospital Name,Address,City,State,State Abbrev,ZIP,NICU Level,NICU Beds\n"
+    "Huntsville Hospital,101 Sivley Rd SW,Huntsville,Alabama,AL,35801,III,55\n"
+    "Mystery Hospital,,Nowhereville,Alabama,AL,,II,n/a\n"
+)
+
+
+@pytest.fixture()
+def hospital_csvs(tmp_path: Path) -> tuple[Path, Path]:
+    trauma, nicu = tmp_path / "trauma.csv", tmp_path / "nicu.csv"
+    trauma.write_text(TRAUMA_CSV, encoding="utf-8")
+    nicu.write_text(NICU_CSV, encoding="utf-8")
+    return trauma, nicu
+
+
+class TestHospitalSnapshot:
+    def test_combines_both_files_with_one_row_per_hospital_per_kind(self, hospital_csvs):
+        df = build_hospital_snapshot(*hospital_csvs, fake_geocoder)
+        assert list(df.columns) == HOSPITAL_COLUMNS
+        assert df["kind"].value_counts().to_dict() == {"trauma": 3, "nicu": 2}
+        # "Huntsville Hospital" is in both files and stays one row in each layer.
+        assert (df["name"] == "Huntsville Hospital").sum() == 2
+
+    def test_trauma_rows_are_normalised(self, hospital_csvs):
+        df = build_hospital_snapshot(*hospital_csvs, fake_geocoder)
+        trauma = df[df["kind"] == "trauma"].set_index("name")
+        assert trauma.loc["Huntsville Hospital", "state"] == "AL"  # was lower-case
+        assert trauma.loc["Huntsville Hospital", "level"] == "I"
+        assert trauma.loc["Huntsville Hospital", "acs_verified"] == "Yes"
+        assert trauma.loc["Children's of Alabama", "level"] == NOT_STATED  # blank level
+        assert trauma.loc["Children's of Alabama", "acs_verified"] == "No"
+        assert pd.isna(trauma["nicu_beds"]).all()
+
+    def test_nicu_rows_carry_level_and_bed_count(self, hospital_csvs):
+        df = build_hospital_snapshot(*hospital_csvs, fake_geocoder)
+        nicu = df[df["kind"] == "nicu"].set_index("name")
+        assert nicu.loc["Huntsville Hospital", "level"] == "III"
+        assert nicu.loc["Huntsville Hospital", "nicu_beds"] == 55
+        assert pd.isna(nicu.loc["Mystery Hospital", "nicu_beds"])  # "n/a" is not a number
+        assert nicu["acs_verified"].isna().all()
+
+    def test_missing_address_falls_back_to_city_and_unknown_city_stays_unplaced(
+        self, hospital_csvs
+    ):
+        df = build_hospital_snapshot(*hospital_csvs, fake_geocoder)
+        by_name = df.set_index("name")
+        assert by_name.loc["Providence Hospital", "geocode_precision"] == "city"  # Mobile, AL
+        assert pd.notna(by_name.loc["Providence Hospital", "lat"])
+        assert by_name.loc["Mystery Hospital", "geocode_precision"] == "none"
+        assert pd.isna(by_name.loc["Mystery Hospital", "lat"])
+
+    def test_snapshot_round_trips_through_parquet(self, hospital_csvs, tmp_path):
+        df = build_hospital_snapshot(*hospital_csvs, fake_geocoder)
+        write_hospital_snapshot(df, tmp_path / "out")
+        reread = pd.read_parquet(tmp_path / "out" / HOSPITAL_PARQUET_NAME)
+        assert list(reread.columns) == HOSPITAL_COLUMNS
+        assert len(reread) == len(df)
+        assert reread["nicu_beds"].dropna().tolist() == [55]
+
+    def test_missing_expected_column_fails_loudly(self, tmp_path):
+        bad = tmp_path / "bad.csv"
+        bad.write_text("Hospital Name,City\nX,Y\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            build_hospital_snapshot(bad, bad, fake_geocoder)
