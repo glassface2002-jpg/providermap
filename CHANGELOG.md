@@ -9,6 +9,12 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Arizona provider run added to the dashboard data.** 34,589 providers from a
+  full-state Cigna FHIR run (185,845 locations walked, 0 errors, 13.4 hours),
+  geocoded and added as a third dataset ("Arizona") alongside AdventHealth and
+  Rhode Island: 90% placed at street level, the rest at their ZIP code. Choose
+  State = AZ with the Hospitals layers on to see providers, trauma centers and
+  NICUs together.
 - **Trauma-center and NICU layers on the dashboard map.** New
   `providermap build-hospital-data --trauma CSV --nicu CSV` geocodes the two
   hospital directories into `dashboard/data/hospitals.parquet`. In the map tab a

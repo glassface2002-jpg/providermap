@@ -1,6 +1,6 @@
 {
-  "built_at": "2026-10-15T22:19:40+00:00",
-  "total_providers": 18585,
+  "built_at": "2026-10-16T13:55:42+00:00",
+  "total_providers": 53174,
   "datasets": {
     "AdventHealth": {
       "providers": 10151,
@@ -16,6 +16,15 @@
       "geocode_precision": {
         "address": 7832,
         "zip": 602,
+        "city": 0,
+        "none": 0
+      }
+    },
+    "Arizona": {
+      "providers": 34589,
+      "geocode_precision": {
+        "address": 31016,
+        "zip": 3573,
         "city": 0,
         "none": 0
       }
