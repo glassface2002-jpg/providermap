@@ -47,6 +47,7 @@ def _row(**overrides: object) -> dict[str, object]:
         zip="32792",
         npi="1194013169",
         profile_url="https://example.org/menezes",
+        provider_type_source="Source",
         site_confidence="high",
         accepting_new_patients=UNKNOWN,
         lat=28.5958,
@@ -66,7 +67,8 @@ def _provider_rows() -> list[dict[str, object]]:
             dataset="Rhode Island",
             name="CATHERINE A'VANT-FOWLER",
             specialty="Counselor",
-            provider_type=NOT_ASSESSED,
+            provider_type="Other clinician",
+            provider_type_source="Inferred from specialty",
             site_confidence=NOT_ASSESSED,
             profile_url=None,
             city="PROVIDENCE",
@@ -496,3 +498,37 @@ def test_hospital_palettes_are_ordered_by_level_and_convert(dashboard: ModuleTyp
         for colour in layer["palette"].values():
             assert len(dashboard.hex_to_rgba(colour)) == 4
     assert list(dashboard.HOSPITAL_LAYERS["Trauma centers"]["palette"])[:2] == ["I", "II"]
+
+
+def test_provider_type_labels_match_the_snapshot_builder(dashboard: ModuleType):
+    """The app cannot import the pipeline, so its copies of these labels are pinned here."""
+    from providermap import map_data
+
+    assert dashboard.TYPE_FROM_SOURCE == map_data.TYPE_FROM_SOURCE
+    assert dashboard.TYPE_INFERRED == map_data.TYPE_INFERRED
+    for provider_type in (map_data.TYPE_PHYSICIAN, map_data.TYPE_APP, map_data.TYPE_OTHER):
+        assert provider_type in dashboard.COLORS
+        assert dashboard.color_for(provider_type) != dashboard.DEFAULT_COLOR
+
+
+def test_map_legend_lists_the_inferred_type_with_its_own_colour(app: AppTest):
+    legend = next(m.value for m in app.markdown if "&#9679;" in m.value)
+    assert "Other clinician" in legend
+
+
+def test_provider_card_says_when_the_type_was_inferred(app: AppTest):
+    app.text_input[0].set_value("catherine").run()
+    card = next(m.value for m in app.markdown if "**Provider type:**" in m.value)
+    assert "Other clinician (inferred from specialty)" in card
+
+
+def test_provider_card_does_not_flag_a_type_that_came_from_the_source(app: AppTest):
+    app.text_input[0].set_value("menezes").run()
+    card = next(m.value for m in app.markdown if "**Provider type:**" in m.value)
+    assert "Physician" in card and "inferred" not in card
+
+
+def test_data_quality_tab_explains_how_provider_type_was_decided(app: AppTest):
+    assert "Provider type" in [s.value for s in app.subheader]
+    explanation = next(m.value for m in app.markdown if "Inferred from specialty" in m.value)
+    assert "does not prove a credential" in explanation

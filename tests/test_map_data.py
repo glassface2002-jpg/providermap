@@ -27,10 +27,16 @@ from providermap.map_data import (
     NOT_STATED,
     PARQUET_NAME,
     SNAPSHOT_COLUMNS,
+    TYPE_APP,
+    TYPE_FROM_SOURCE,
+    TYPE_INFERRED,
+    TYPE_OTHER,
+    TYPE_PHYSICIAN,
     UNKNOWN,
     build_hospital_snapshot,
     build_info,
     build_snapshot,
+    infer_provider_type,
     load_export,
     write_hospital_snapshot,
     write_snapshot,
@@ -119,12 +125,13 @@ def exports(db: Database, tmp_path: Path) -> dict[str, Path]:
 class TestLoadExport:
     def test_renames_to_snapshot_columns_and_labels_missing_values(self, exports):
         df = load_export("Rhode Island", exports["Rhode Island"])
-        assert list(df.columns) == ["dataset", *EXPORT_COLUMNS.values()]
+        assert list(df.columns) == ["dataset", *EXPORT_COLUMNS.values(), "provider_type_source"]
         row = df.iloc[0]
         assert row["dataset"] == "Rhode Island"
         assert row["name"] == "CATHERINE A'VANT-FOWLER"
         assert row["zip"] == "02904-5762"
-        assert row["provider_type"] == NOT_ASSESSED
+        assert row["provider_type"] == TYPE_OTHER  # the source gave none: inferred from "Counselor"
+        assert row["provider_type_source"] == TYPE_INFERRED
         assert row["site_confidence"] == NOT_ASSESSED
         assert row["accepting_new_patients"] == UNKNOWN
         assert row["profile_url"] is None  # genuinely absent stays None, not "nan"
@@ -140,6 +147,43 @@ class TestLoadExport:
         pd.DataFrame({"Provider Name": ["x"]}).to_excel(bad, sheet_name="Providers", index=False)
         with pytest.raises(ValueError):
             load_export("bad", bad)
+
+
+class TestInferProviderType:
+    @pytest.mark.parametrize(
+        ("specialty", "expected"),
+        [
+            ("Family Nurse Practitioner", TYPE_APP),
+            ("Pediatric Nurse Practitioner", TYPE_APP),
+            ("Physician Assistant", TYPE_APP),  # contains "physician" but is not a physician
+            ("Certified Registered Nurse Anesthetist", TYPE_APP),
+            ("Certified Nurse Midwife", TYPE_APP),
+            ("Internal Medicine Physician", TYPE_PHYSICIAN),
+            ("Orthopaedic Surgery Physician", TYPE_PHYSICIAN),
+            ("Counselor", TYPE_OTHER),
+            ("Optometrist", TYPE_OTHER),
+            ("Midwife", TYPE_OTHER),  # a lay/professional midwife, not an APRN
+            ("Surgical Assistant", TYPE_OTHER),
+            ("Registered Nurse", TYPE_OTHER),
+            (None, None),
+            ("", None),
+        ],
+    )
+    def test_rules(self, specialty, expected):
+        assert infer_provider_type(specialty) == expected
+
+    def test_matches_the_pipelines_own_provider_type_values(self):
+        assert ProviderType.PHYSICIAN.value == TYPE_PHYSICIAN
+        assert ProviderType.ADVANCED_PRACTICE_PROVIDER.value == TYPE_APP
+
+    def test_source_types_are_kept_and_only_gaps_are_inferred(self, exports):
+        df = load_export("AdventHealth", exports["AdventHealth"]).set_index("name")
+        menezes = df.loc["Justin Menezes, MD"]
+        assert menezes["provider_type"] == TYPE_PHYSICIAN
+        assert menezes["provider_type_source"] == TYPE_FROM_SOURCE  # never overwritten
+        no_specialty = df.loc["No Zip"]  # no type and no specialty to infer from
+        assert no_specialty["provider_type"] == NOT_ASSESSED
+        assert no_specialty["provider_type_source"] == NOT_ASSESSED
 
 
 class TestBuildSnapshot:

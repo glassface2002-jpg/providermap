@@ -9,6 +9,18 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Provider type inferred from specialty where the source has none.** Cigna's
+  directory carries no credentials, so the Arizona and Rhode Island rows used to
+  show as one gray "Not assessed" colour. `providermap/map_data.py` now infers
+  Physician / Advanced Practice Provider / Other clinician from the specialty name
+  (nurse practitioner, physician assistant, nurse anesthetist, nurse midwife and
+  clinical nurse specialist are advanced-practice; a specialty containing
+  "Physician" is a physician; anything else is another kind of clinician) and
+  records `provider_type_source` so the dashboard labels these as inferred in the
+  legend, the provider card, the click-to-list table and the Data quality tab.
+  Types a dataset supplied itself (AdventHealth) are never overwritten. For
+  Arizona that is 56% Physician, 20.5% Advanced Practice, 18.7% Other clinician,
+  4.7% with no specialty and so still "Not assessed".
 - **Arizona provider run added to the dashboard data.** 34,589 providers from a
   full-state Cigna FHIR run (185,845 locations walked, 0 errors, 13.4 hours),
   geocoded and added as a third dataset ("Arizona") alongside AdventHealth and

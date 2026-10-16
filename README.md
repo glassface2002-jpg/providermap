@@ -492,7 +492,10 @@ Addresses it cannot match at street level fall back to the centre of their ZIP
 code and are labelled as such; addresses with no usable ZIP are kept in the
 counts but left off the map. Addresses with no street or ZIP match fall back to
 their ZIP code, then city. Answers are cached in `.cache/geocode.csv`, so a rerun
-only sends addresses it has not seen. The output is small files
+only sends addresses it has not seen. A dataset whose source records no provider
+type (Cigna's directory carries no credentials) gets one inferred from the
+specialty name - Physician, Advanced Practice Provider, or Other clinician - and
+the dashboard marks those as inferred; a dataset's own types are never overwritten. The output is small files
 (`dashboard/data/providers.parquet`, `build_info.json`, and `hospitals.parquet`
 if you built the hospital layers), which are committed:
 the app reads only those, so it needs neither the pipeline nor the database.

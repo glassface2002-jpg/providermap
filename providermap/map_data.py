@@ -10,6 +10,12 @@ data from several runs - each tagged with a ``dataset`` label - side by side.
 dashboard. Fields a run did not collect are filled with explicit labels
 (:data:`NOT_ASSESSED`, :data:`UNKNOWN`) rather than left blank, so filters
 and charts never have to special-case missing values.
+
+Provider type is the one field filled in beyond what a run recorded: a source
+that carries no credentials (Cigna's directory) leaves it blank, so it is
+inferred from the specialty text by :func:`infer_provider_type`, and the
+``provider_type_source`` column records which rows are the source's own and
+which are inferred, so the dashboard never presents a guess as fact.
 """
 
 from __future__ import annotations
@@ -49,7 +55,22 @@ EXPORT_COLUMNS = {
     "Accepting New Patients": "accepting_new_patients",
 }
 GEO_COLUMNS = ["lat", "lon", "county_fips", "geocode_precision"]
-SNAPSHOT_COLUMNS = ["dataset", *EXPORT_COLUMNS.values(), *GEO_COLUMNS]
+SNAPSHOT_COLUMNS = ["dataset", *EXPORT_COLUMNS.values(), "provider_type_source", *GEO_COLUMNS]
+
+# Provider type. The first two values must match the pipeline's ProviderType enum (a test
+# checks), since AdventHealth's rows arrive already carrying them.
+TYPE_PHYSICIAN = "Physician"
+TYPE_APP = "Advanced Practice Provider"
+TYPE_OTHER = "Other clinician"  # counselors, social workers, therapists, dentists, ...
+TYPE_FROM_SOURCE = "Source"
+TYPE_INFERRED = "Inferred from specialty"
+_APP_SPECIALTIES = (
+    "nurse practitioner",
+    "physician assistant",
+    "nurse anesthetist",
+    "nurse midwife",
+    "clinical nurse specialist",
+)
 
 # Hospital layers (trauma centres and NICUs): one row per hospital per kind. A hospital that is
 # both appears twice, once per kind, so each layer stands alone and no cross-file name matching
@@ -75,6 +96,23 @@ HOSPITAL_COLUMNS = [
 Geocoder = Callable[[list[Address]], dict[str, GeoResult]]
 
 
+def infer_provider_type(specialty: str | None) -> str | None:
+    """Best guess at a provider's type from the specialty name alone (``None`` if there is none).
+
+    Advanced-practice roles are named outright ("Family Nurse Practitioner", "Physician
+    Assistant"). The NPI taxonomy names physician specialties "<specialty> Physician". Any other
+    specialty (counselor, optometrist, physical therapist, ...) is a different kind of clinician.
+    Checked in that order, because "Physician Assistant" contains the word "physician". A
+    specialty name does not prove a credential, so callers keep the result labelled as inferred.
+    """
+    if not specialty:
+        return None
+    text = specialty.lower()
+    if any(marker in text for marker in _APP_SPECIALTIES):
+        return TYPE_APP
+    return TYPE_PHYSICIAN if "physician" in text else TYPE_OTHER
+
+
 def load_export(label: str, path: Path) -> pd.DataFrame:
     """Read one ``providers.xlsx`` into snapshot columns (without coordinates).
 
@@ -85,7 +123,12 @@ def load_export(label: str, path: Path) -> pd.DataFrame:
     df = df.rename(columns=EXPORT_COLUMNS)[list(EXPORT_COLUMNS.values())]
     df = df.astype(object).where(df.notna(), None)
     df["state"] = df["state"].str.strip().str.upper()  # sources contain typos like "Fl", "fL"
-    df["provider_type"] = df["provider_type"].fillna(NOT_ASSESSED)
+    inferred = df["specialty"].map(infer_provider_type)
+    df["provider_type_source"] = [
+        TYPE_FROM_SOURCE if given is not None else TYPE_INFERRED if guess else NOT_ASSESSED
+        for given, guess in zip(df["provider_type"], inferred, strict=True)
+    ]
+    df["provider_type"] = df["provider_type"].fillna(inferred).fillna(NOT_ASSESSED)
     df["site_confidence"] = df["site_confidence"].fillna(NOT_ASSESSED)
     df["accepting_new_patients"] = df["accepting_new_patients"].fillna(UNKNOWN)
     df.insert(0, "dataset", label)

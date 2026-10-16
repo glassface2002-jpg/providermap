@@ -32,13 +32,18 @@ COLORS = {
     "low": "#d95f02",
     "Physician": "#1f77b4",
     "Advanced Practice Provider": "#17becf",
+    "Other clinician": "#8c564b",
     NOT_ASSESSED: "#9aa0a6",
 }
+# How a provider's type was decided (see providermap/map_data.py, which writes these values).
+TYPE_FROM_SOURCE = "Source"
+TYPE_INFERRED = "Inferred from specialty"
 TABLE_COLUMNS = [
     "name",
     "credentials",
     "specialty",
     "provider_type",
+    "provider_type_source",
     "primary_site",
     "address",
     "city",
@@ -477,8 +482,10 @@ def find_tab(df: pd.DataFrame) -> None:
     }
     choice = st.selectbox("Matches", list(labels), format_func=labels.get)
     row = matches.loc[choice]
+    note = " (inferred from specialty)" if row["provider_type_source"] == TYPE_INFERRED else ""
     st.subheader(row["name"])
     st.markdown(
+        f"**Provider type:** {row['provider_type']}{note}  \n"
         f"**Specialty:** {row['specialty'] or 'n/a'}  \n"
         f"**Primary site of care:** {row['primary_site'] or 'n/a'}  \n"
         f"**Address:** {row['address']}, {row['city']}, {row['state']} {row['zip']}  \n"
@@ -519,7 +526,7 @@ def hospital_quality(hospitals: pd.DataFrame) -> None:
             st.caption(f"{name}: the source has no hospitals for {', '.join(absent)}.")
 
 
-def quality_tab(info: dict, hospitals: pd.DataFrame | None) -> None:
+def quality_tab(info: dict, hospitals: pd.DataFrame | None, df: pd.DataFrame) -> None:
     st.write(
         f"Snapshot built {info['built_at'][:16].replace('T', ' ')} UTC from {info['total_providers']:,} provider records."
     )
@@ -546,7 +553,21 @@ def quality_tab(info: dict, hospitals: pd.DataFrame | None) -> None:
         "- **high**: single location and an identity confirmed against the CMS NPPES registry.\n"
         "- **medium**: two or three locations, or identity unconfirmed.\n"
         "- **low**: four or more locations; a single 'primary site' is not meaningful.\n"
-        "- **Not assessed**: that dataset's run did not compute site confidence or provider type.\n"
+        "- **Not assessed**: that dataset's run did not compute site confidence (or, for provider "
+        "type, had no specialty to infer it from).\n"
+    )
+    st.subheader("Provider type")
+    by_source = df.groupby(["dataset", "provider_type_source"]).size().unstack(fill_value=0)
+    st.dataframe(by_source.reset_index(), hide_index=True, width="stretch")
+    st.markdown(
+        f"- **{TYPE_FROM_SOURCE}**: the dataset's own classification.\n"
+        f"- **{TYPE_INFERRED}**: the dataset recorded no provider type, so it is guessed from the "
+        "specialty name. A specialty naming a nurse practitioner, physician assistant, nurse "
+        "anesthetist, nurse midwife or clinical nurse specialist is an Advanced Practice Provider; "
+        "a specialty containing 'Physician' is a Physician; any other specialty (counselor, social "
+        "worker, optometrist, therapist, ...) is an Other clinician. A specialty name does not prove "
+        "a credential, so treat these as estimates.\n"
+        f"- **{NOT_ASSESSED}**: no provider type and no specialty to infer one from.\n"
     )
     st.subheader("Specialty names")
     st.markdown(
@@ -581,7 +602,7 @@ def main() -> None:
     with find_t:
         find_tab(df)
     with quality_t:
-        quality_tab(info, hospitals)
+        quality_tab(info, hospitals, df)
 
 
 if __name__ == "__main__":
