@@ -1,7 +1,38 @@
 {
-  "built_at": "2026-10-20T20:59:29+00:00",
-  "total_providers": 53174,
+  "built_at": "2026-10-20T22:47:31+00:00",
+  "total_providers": 208429,
   "datasets": {
+    "Cigna": {
+      "providers": 163689,
+      "states_done": [
+        "AK",
+        "AR",
+        "DC",
+        "DE",
+        "HI",
+        "ID",
+        "KS",
+        "ME",
+        "MS",
+        "MT",
+        "ND",
+        "NE",
+        "NH",
+        "NM",
+        "NV",
+        "RI",
+        "SD",
+        "VT",
+        "WV",
+        "WY"
+      ]
+    },
+    "Arizona": {
+      "providers": 34589,
+      "states_done": [
+        "AZ"
+      ]
+    },
     "AdventHealth": {
       "providers": 10151,
       "states_done": [
@@ -21,18 +52,6 @@
         "TX",
         "VA",
         "WI"
-      ]
-    },
-    "Rhode Island": {
-      "providers": 8434,
-      "states_done": [
-        "RI"
-      ]
-    },
-    "Arizona": {
-      "providers": 34589,
-      "states_done": [
-        "AZ"
       ]
     }
   }
