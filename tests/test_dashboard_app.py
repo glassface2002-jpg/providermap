@@ -1,20 +1,21 @@
 """Smoke tests for dashboard/app.py, run headlessly with Streamlit's AppTest.
 
-The snapshot is built from ``SNAPSHOT_COLUMNS`` itself, so if the app starts
-using a column the builder does not produce (or the builder drops one the app
-needs), these tests fail instead of the live dashboard.
+The snapshots are produced by ``providermap.map_data`` itself, so if the app
+starts using a column the builder does not write (or the builder drops one the
+app needs), these tests fail instead of the live dashboard.
 """
 
 from __future__ import annotations
 
-import ast
 import importlib.util
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -23,68 +24,72 @@ from providermap.map_data import (
     HOSPITAL_COLUMNS,
     NOT_ASSESSED,
     NOT_STATED,
-    SNAPSHOT_COLUMNS,
-    UNKNOWN,
+    ROW_COLUMNS,
+    Snapshot,
+    aggregate_locations,
+    summarize,
     write_hospital_snapshot,
     write_snapshot,
 )
 
-APP = str(Path(__file__).resolve().parent.parent / "dashboard" / "app.py")
+REPO = Path(__file__).resolve().parent.parent
+APP = str(REPO / "dashboard" / "app.py")
 
 
 def _row(**overrides: object) -> dict[str, object]:
-    base: dict[str, object] = dict.fromkeys(SNAPSHOT_COLUMNS)
-    base.update(
-        dataset="AdventHealth",
-        name="Justin Menezes, MD",
-        credentials="MD",
-        specialty="Family Medicine",
-        provider_type="Physician",
-        primary_site="AdventHealth Family Medicine at Winter Park",
-        address="133 Benmore Drive Suite 200",
-        city="Winter Park",
-        state="FL",
-        zip="32792",
-        npi="1194013169",
-        profile_url="https://example.org/menezes",
-        provider_type_source="Source",
-        site_confidence="high",
-        accepting_new_patients=UNKNOWN,
-        lat=28.5958,
-        lon=-81.3271,
-        county_fips="12095",
-        geocode_precision="address",
-    )
-    base.update(overrides)
-    return base
+    base: dict[str, object] = {
+        "dataset": "AdventHealth",
+        "specialty": "Family Medicine",
+        "provider_type": "Physician",
+        "primary_site": "AdventHealth Family Medicine at Winter Park",
+        "address": "133 Benmore Drive Suite 200",
+        "city": "Winter Park",
+        "state": "FL",
+        "zip": "32792",
+        "site_confidence": "high",
+        "provider_type_source": "Source",
+        "lat": 28.5958,
+        "lon": -81.3271,
+        "geocode_precision": "address",
+    }
+    return base | overrides
 
 
 def _provider_rows() -> list[dict[str, object]]:
     return [
-        _row(),
-        _row(name="Ana Lopez, NP", provider_type="Advanced Practice Provider", npi="1111111112"),
+        *[_row() for _ in range(6)],  # one busy, named site
+        _row(
+            provider_type="Advanced Practice Provider",
+            specialty="Cardiology",
+            primary_site="A Private Practice",
+            lat=28.7,
+            lon=-81.4,
+        ),
         _row(
             dataset="Rhode Island",
-            name="CATHERINE A'VANT-FOWLER",
             specialty="Counselor",
             provider_type="Other clinician",
             provider_type_source="Inferred from specialty",
             site_confidence=NOT_ASSESSED,
-            profile_url=None,
-            city="PROVIDENCE",
+            city="Providence",
             state="RI",
-            npi="1265446264",
             lat=41.8541,
             lon=-71.4378,
             geocode_precision="zip",
         ),
-        _row(name="No Address", npi="1234567893", lat=None, lon=None, geocode_precision="none"),
+        _row(lat=None, lon=None, geocode_precision="none"),  # counted, but not on the map
     ]
+
+
+def _snapshot(rows: list[dict[str, object]], states_done: dict[str, list[str]]) -> Snapshot:
+    return summarize(pd.DataFrame(rows, columns=ROW_COLUMNS), states_done)
 
 
 @pytest.fixture()
 def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
-    write_snapshot(pd.DataFrame(_provider_rows(), columns=SNAPSHOT_COLUMNS), tmp_path)
+    write_snapshot(
+        _snapshot(_provider_rows(), {"AdventHealth": ["FL"], "Rhode Island": ["RI"]}), tmp_path
+    )
     monkeypatch.setenv("PROVIDERMAP_DATA_DIR", str(tmp_path))
     return AppTest.from_file(APP, default_timeout=60).run()
 
@@ -142,12 +147,25 @@ def _hospital_rows() -> list[dict[str, object]]:
 
 @pytest.fixture()
 def app_with_hospitals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
-    write_snapshot(pd.DataFrame(_provider_rows(), columns=SNAPSHOT_COLUMNS), tmp_path)
+    write_snapshot(
+        _snapshot(_provider_rows(), {"AdventHealth": ["FL"], "Rhode Island": ["RI"]}), tmp_path
+    )
     frame = pd.DataFrame(_hospital_rows(), columns=HOSPITAL_COLUMNS)
     frame["nicu_beds"] = frame["nicu_beds"].astype("Int64")
     write_hospital_snapshot(frame, tmp_path)
     monkeypatch.setenv("PROVIDERMAP_DATA_DIR", str(tmp_path))
     return AppTest.from_file(APP, default_timeout=60).run()
+
+
+def _big_snapshot(points: int) -> Snapshot:
+    """Arizona with ``points`` one-provider points, plus one Rhode Island point."""
+    rng = np.random.default_rng(0)
+    az = pd.DataFrame([_row(dataset="Cigna", state="AZ", city="Phoenix")] * points)
+    az["lat"] = 33 + rng.random(points)
+    az["lon"] = -112 + rng.random(points)
+    ri = pd.DataFrame([_row(dataset="Cigna", state="RI", city="Providence", lat=41.8, lon=-71.4)])
+    rows = pd.concat([az, ri], ignore_index=True)[ROW_COLUMNS]
+    return summarize(rows, {"Cigna": ["AZ", "RI"]})
 
 
 def _layers(at: AppTest) -> list[dict]:
@@ -169,43 +187,43 @@ def _metrics(at: AppTest) -> dict[str, str]:
 def test_renders_without_errors_and_counts_every_provider(app: AppTest):
     assert not app.exception
     metrics = _metrics(app)
-    assert metrics["Providers"] == "4"
-    assert metrics["Mapped locations"] == "2"  # the unmappable row is counted but not mapped
+    assert metrics["Providers"] == "8"  # includes the unmappable row (the overview tab has its own)
+    assert metrics["Mapped locations"] == "2"
     assert metrics["High-confidence sites"] == "100%"  # only assessed providers count
+    assert metrics["Specialties"] == "2"
 
 
-def test_dataset_filter_narrows_everything(app: AppTest):
-    dataset_filter = next(m for m in app.sidebar.multiselect if m.label == "Dataset")
-    dataset_filter.select("Rhode Island").run()
+def test_dataset_choice_narrows_everything(app: AppTest):
+    app.sidebar.selectbox[0].select("Rhode Island").run()
     assert not app.exception
     metrics = _metrics(app)
     assert metrics["Providers"] == "1"
     assert metrics["High-confidence sites"] == "n/a"  # nothing assessed in that dataset
 
 
-def test_filters_matching_nothing_do_not_crash(app: AppTest):
-    next(m for m in app.sidebar.multiselect if m.label == "Dataset").select("Rhode Island").run()
-    next(m for m in app.sidebar.multiselect if m.label == "State").select("FL").run()
-    assert not app.exception
-    assert _metrics(app)["Providers"] == "0"
+def test_the_default_dataset_is_the_one_with_the_most_providers(app: AppTest):
+    assert app.sidebar.selectbox[0].value == "AdventHealth"  # 9 providers vs Rhode Island's 1
 
 
-def test_find_a_provider_shows_the_match(app: AppTest):
-    app.text_input[0].set_value("menezes").run()
-    assert not app.exception
-    assert any(s.value == "Justin Menezes, MD" for s in app.subheader)
+def test_a_state_with_no_providers_in_the_dataset_does_not_crash(app_with_hospitals: AppTest):
+    at = _pick(app_with_hospitals, "State", "AZ", sidebar=True)  # AZ only has hospitals
+    assert not at.exception
+    assert _metrics(at)["Providers"] == "0"
+    assert _metrics(at)["High-confidence sites"] == "n/a"
 
 
-def test_selection_table_columns_exist_in_the_snapshot():
-    """The click-to-list table only runs after a map click, which AppTest cannot simulate."""
-    tree = ast.parse(Path(APP).read_text(encoding="utf-8"))
-    table_columns = next(
-        ast.literal_eval(node.value)
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == "TABLE_COLUMNS" for t in node.targets)
-    )
-    assert set(table_columns) <= set(SNAPSHOT_COLUMNS)
+def test_no_find_a_provider_tab_and_no_row_level_inputs(app: AppTest):
+    assert [t.label for t in app.tabs] == ["National overview", "Map", "Insights", "Data quality"]
+    assert not app.text_input
+    labels = [m.label for m in app.sidebar.multiselect]
+    assert labels == ["State"]  # no specialty or accepting-new-patients filters any more
+
+
+def test_overview_reports_how_much_of_the_country_is_covered(app: AppTest):
+    metrics = _metrics(app)
+    assert metrics["States covered"] == "1 of 51"
+    assert metrics["As of"] == pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
+    assert any("not every provider in a state" in c.value for c in app.caption)
 
 
 @pytest.fixture(scope="module")
@@ -218,37 +236,110 @@ def dashboard() -> ModuleType:
     return module
 
 
-class TestAggregateLocations:
-    def test_one_row_per_point_with_counts_and_dominant_values(self, dashboard: ModuleType):
-        mapped = pd.DataFrame(
-            [
-                _row(npi="1", specialty="Family Medicine"),
-                _row(npi="2", specialty="Family Medicine"),
-                _row(npi="3", specialty="Cardiology", primary_site=None),
-                _row(npi="4", lat=41.85, lon=-71.43, primary_site=None, specialty=None),
-            ]
+class TestOverviewFigure:
+    def test_finished_states_are_coloured_and_the_rest_are_grey(self, dashboard: ModuleType):
+        counts = pd.DataFrame({"state": ["AZ", "RI"], "providers": [34_000, 8_000]})
+        fig = dashboard.overview_figure(counts, ["AZ", "RI"])
+        done, pending = fig.data
+        assert sorted(done.locations) == ["AZ", "RI"]
+        assert sorted(done.customdata) == [8_000, 34_000]  # hover shows real counts, not logs
+        assert set(pending.locations) == set(dashboard.ALL_STATES) - {"AZ", "RI"}
+        assert len(pending.locations) == 49
+        assert {c[1] for c in pending.colorscale} == {dashboard.PENDING_COLOR}
+
+    def test_a_finished_state_with_no_providers_is_not_grey(self, dashboard: ModuleType):
+        counts = pd.DataFrame({"state": ["AZ"], "providers": [5]})
+        fig = dashboard.overview_figure(counts, ["AZ", "WY"])
+        assert "WY" not in fig.data[1].locations  # finished (just empty), so not "pending"
+
+    def test_codes_that_are_not_states_are_left_off_the_map(self, dashboard: ModuleType):
+        counts = pd.DataFrame({"state": ["AZ", "Unknown"], "providers": [5, 3]})
+        assert list(dashboard.overview_figure(counts, ["AZ"]).data[0].locations) == ["AZ"]
+
+
+class TestDatasetOrder:
+    def test_most_providers_first(self, dashboard: ModuleType):
+        info = {
+            "datasets": {
+                "small": {"providers": 5, "states_done": ["AZ", "RI", "FL"]},
+                "big": {"providers": 50, "states_done": ["AZ"]},
+                "mid": {"providers": 9, "states_done": ["AZ"]},
+            }
+        }
+        assert dashboard.dataset_order(info) == ["big", "mid", "small"]
+
+
+class TestPreparePoints:
+    @pytest.fixture()
+    def locations(self) -> pd.DataFrame:
+        rows = pd.DataFrame(_provider_rows(), columns=ROW_COLUMNS)
+        return aggregate_locations(rows[rows["dataset"] == "AdventHealth"])
+
+    def test_busiest_first_with_ids_sizes_and_colours(self, dashboard: ModuleType, locations):
+        points, total = dashboard.prepare_points(locations, "Provider type")
+        assert total == 2
+        assert points["providers"].tolist() == [6, 1]
+        assert points["location_id"].tolist() == [0, 1]
+        big, small = points["radius_m"]
+        assert (big / small) ** 2 == pytest.approx(6)  # dot area is proportional to providers
+        assert all(len(c) == 4 for c in points["color"])
+        physician = dashboard.hex_to_rgba(dashboard.COLORS["Physician"])
+        assert points["color"].iloc[0] == physician
+
+    def test_colour_by_confidence_changes_the_colour(self, dashboard: ModuleType, locations):
+        points, _ = dashboard.prepare_points(locations, "Site confidence")
+        assert points["color"].iloc[0] == dashboard.hex_to_rgba(dashboard.COLORS["high"])
+
+    def test_only_big_sites_are_named_in_the_hover_text(self, dashboard: ModuleType, locations):
+        points, _ = dashboard.prepare_points(locations, "Provider type")
+        big, small = points["title"]
+        assert big == "AdventHealth Family Medicine at Winter Park"
+        assert small == "Small practice site"  # not the private practice's name
+        assert points["place"].iloc[0] == "133 Benmore Drive Suite 200, Winter Park"
+        assert points["place"].iloc[1] == "Winter Park"  # no street for a small point
+        assert "A Private Practice" not in points.to_json()
+
+    def test_approximate_points_say_so(self, dashboard: ModuleType):
+        rows = pd.DataFrame(_provider_rows(), columns=ROW_COLUMNS)
+        points, _ = dashboard.prepare_points(
+            aggregate_locations(rows[rows["dataset"] == "Rhode Island"]), "Provider type"
         )
-        out = dashboard.aggregate_locations(mapped).set_index("lat")
+        assert points["title"].iloc[0] == "Approximate location (centre of the ZIP code)"
 
-        assert len(out) == 2
-        orlando = out.loc[28.5958]
-        assert orlando["providers"] == 3
-        assert orlando["site"] == "AdventHealth Family Medicine at Winter Park"
-        assert orlando["specialties"] == "Family Medicine, Cardiology"
-        providence = out.loc[41.85]
-        assert providence["providers"] == 1
-        assert providence["site"] == "Unnamed site"
-        assert providence["specialties"] == ""
-        assert sorted(out["location_id"]) == [0, 1]
-        assert orlando["radius_m"] == pytest.approx(dashboard.RADIUS_M_PER_SQRT_PROVIDER * 3**0.5)
+    def test_hover_text_gives_the_split_and_specialties(self, dashboard: ModuleType, locations):
+        points, _ = dashboard.prepare_points(locations, "Provider type")
+        assert points["mix"].iloc[0] == "Physician 6"
+        assert points["detail"].iloc[0] == "6 providers - Family Medicine (6)"
+        assert points["detail"].iloc[1] == "1 provider - Cardiology (1)"
+        assert points["mix"].iloc[1] == "Advanced practice 1"
 
-    def test_largest_first_and_dot_area_proportional_to_providers(self, dashboard: ModuleType):
-        rows = [_row(npi=str(i), lat=28.0, lon=-81.0) for i in range(4)]  # 4 providers
-        rows.append(_row(npi="9", lat=41.0, lon=-71.0))  # 1 provider
-        out = dashboard.aggregate_locations(pd.DataFrame(rows))
-        assert out["providers"].tolist() == [4, 1]
-        big, small = out["radius_m"]
-        assert (big / small) ** 2 == pytest.approx(4)  # area ratio equals provider ratio
+    def test_a_huge_dataset_keeps_only_the_busiest_points(self, dashboard: ModuleType):
+        locations = _big_snapshot(dashboard.MAX_MAP_POINTS + 10).locations
+        locations.loc[locations.index[0], "providers"] = 99  # one clearly busiest point
+        points, total = dashboard.prepare_points(locations, "Provider type")
+        assert total == dashboard.MAX_MAP_POINTS + 11
+        assert len(points) == dashboard.MAX_MAP_POINTS
+        assert points["providers"].iloc[0] == 99
+
+
+class TestBigDatasets:
+    @pytest.fixture()
+    def big(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dashboard: ModuleType):
+        write_snapshot(_big_snapshot(dashboard.MAX_MAP_POINTS), tmp_path)  # + 1 RI point: too many
+        monkeypatch.setenv("PROVIDERMAP_DATA_DIR", str(tmp_path))
+        return AppTest.from_file(APP, default_timeout=120).run()
+
+    def test_starts_on_the_biggest_state_so_the_map_is_not_empty(self, big: AppTest):
+        assert not big.exception
+        assert big.sidebar.multiselect[0].value == ["AZ"]
+        (layer,) = _layers(big)
+        assert len(layer["data"]) > 20_000
+
+    def test_clearing_the_state_asks_for_one_instead_of_drawing_everything(self, big: AppTest):
+        big.sidebar.multiselect[0].set_value([]).run()
+        assert not big.exception
+        assert not big.get("deck_gl_json_chart")
+        assert any("too many to draw" in i.value for i in big.info)
 
 
 class TestZoomFor:
@@ -321,8 +412,7 @@ class TestSelectedLocationIds:
 
 def test_map_layer_sizes_dots_in_metres_with_pixel_limits(app: AppTest):
     """Dots grow with zoom because the radius is in metres, clamped to a pixel range."""
-    deck = json.loads(app.get("deck_gl_json_chart")[0].proto.json)
-    (layer,) = deck["layers"]
+    (layer,) = _layers(app)
     assert layer["@@type"] == "ScatterplotLayer"
     assert layer["id"] == "locations"
     assert layer["pickable"] is True
@@ -334,6 +424,22 @@ def test_map_layer_sizes_dots_in_metres_with_pixel_limits(app: AppTest):
     assert len(rows) == 2  # two distinct mapped points; the unmappable row is not drawn
     assert sorted(r["location_id"] for r in rows) == [0, 1]
     assert all(len(r["color"]) == 4 and r["radius_m"] > 0 for r in rows)
+
+
+def test_map_layer_carries_counts_only(app: AppTest):
+    """Nothing that identifies a person is ever put into the page."""
+    (layer,) = _layers(app)
+    assert set(layer["data"][0]) == {
+        "lat",
+        "lon",
+        "location_id",
+        "radius_m",
+        "color",
+        "title",
+        "place",
+        "detail",
+        "mix",
+    }
 
 
 def test_deploy_requirements_are_pinned_like_the_dashboard_extra():
@@ -352,13 +458,13 @@ def test_deploy_requirements_are_pinned_like_the_dashboard_extra():
     assert deployed <= extra
 
 
-def test_a_rebuilt_snapshot_is_not_hidden_by_the_cache(app: AppTest, tmp_path: Path, monkeypatch):
+def test_a_rebuilt_snapshot_is_not_hidden_by_the_cache(app: AppTest, tmp_path: Path):
     """A running server must pick up new data even though the app code did not change."""
-    assert _metrics(app)["Providers"] == "4"
+    assert _metrics(app)["Providers"] == "8"
 
-    write_snapshot(pd.DataFrame([_row()], columns=SNAPSHOT_COLUMNS), tmp_path)
-    bumped = (tmp_path / "providers.parquet").stat().st_mtime_ns + 5_000_000_000
-    os.utime(tmp_path / "providers.parquet", ns=(bumped, bumped))
+    write_snapshot(_snapshot([_row()], {"AdventHealth": ["FL"]}), tmp_path)
+    bumped = (tmp_path / "by_state.csv").stat().st_mtime_ns + 5_000_000_000
+    os.utime(tmp_path / "by_state.csv", ns=(bumped, bumped))
 
     refreshed = AppTest.from_file(APP, default_timeout=60).run()
     assert not refreshed.exception
@@ -388,14 +494,14 @@ class TestHospitalLayers:
     def test_trauma_rings_default_to_acs_verified_only(self, app_with_hospitals: AppTest):
         at = _pick(app_with_hospitals, "Hospitals", "Trauma centers")
         trauma = next(layer for layer in _layers(at) if layer["id"] == "trauma-centers")
-        assert [row["site"] for row in trauma["data"]] == ["Rhode Island Hospital"]
+        assert [row["title"] for row in trauma["data"]] == ["Rhode Island Hospital"]
         assert next(c for c in at.checkbox if "ACS-verified" in c.label).value is True
 
     def test_unticking_shows_every_placed_trauma_center(self, app_with_hospitals: AppTest):
         at = _pick(app_with_hospitals, "Hospitals", "Trauma centers")
         next(c for c in at.checkbox if "ACS-verified" in c.label).uncheck().run()
         trauma = next(layer for layer in _layers(at) if layer["id"] == "trauma-centers")
-        assert sorted(row["site"] for row in trauma["data"]) == [
+        assert sorted(row["title"] for row in trauma["data"]) == [
             "Phoenix Children's",
             "Rhode Island Hospital",
         ]
@@ -412,7 +518,7 @@ class TestHospitalLayers:
         assert trauma["stroked"] is True and trauma["pickable"] is True
         assert trauma["radiusMinPixels"] < trauma["radiusMaxPixels"]
         assert trauma["lineWidthMinPixels"] == 3
-        names = sorted(row["site"] for row in trauma["data"])
+        names = sorted(row["title"] for row in trauma["data"])
         assert names == ["Phoenix Children's", "Rhode Island Hospital"]  # unplaced one is dropped
         assert all(len(row["color"]) == 4 and len(row["fill"]) == 4 for row in trauma["data"])
 
@@ -420,7 +526,7 @@ class TestHospitalLayers:
         at = _pick(app_with_hospitals, "Hospitals", "Trauma centers")
         at = _pick(at, "State", "RI", sidebar=True)
         trauma = next(layer for layer in _layers(at) if layer["id"] == "trauma-centers")
-        assert [row["site"] for row in trauma["data"]] == ["Rhode Island Hospital"]
+        assert [row["title"] for row in trauma["data"]] == ["Rhode Island Hospital"]
 
     def test_a_state_with_hospitals_but_no_providers_still_draws_a_map(
         self, app_with_hospitals: AppTest
@@ -445,7 +551,7 @@ class TestHospitalLayers:
         nicu = next(layer for layer in deck["layers"] if layer["id"] == "nicu-centers")
         (row,) = nicu["data"]
         assert row["detail"] == "NICU level III - 40 beds"
-        assert row["address"] == "1400 S Dobson Rd, Mesa, AZ 85202"
+        assert row["place"] == "1400 S Dobson Rd, Mesa, AZ 85202"
 
     def test_data_quality_tab_describes_the_hospital_layers(self, app_with_hospitals: AppTest):
         assert "Hospital layers" in [s.value for s in app_with_hospitals.subheader]
@@ -460,27 +566,27 @@ class TestHospitalPoints:
 
     def test_only_placed_hospitals_of_the_kind(self, dashboard: ModuleType, hospitals):
         points = dashboard.hospital_points(hospitals, "trauma", [])
-        assert sorted(points["site"]) == ["Phoenix Children's", "Rhode Island Hospital"]
+        assert sorted(points["title"]) == ["Phoenix Children's", "Rhode Island Hospital"]
 
     def test_verified_only_applies_to_trauma_but_not_nicu(self, dashboard: ModuleType, hospitals):
         trauma = dashboard.hospital_points(hospitals, "trauma", [], verified_only=True)
-        assert trauma["site"].tolist() == ["Rhode Island Hospital"]
+        assert trauma["title"].tolist() == ["Rhode Island Hospital"]
         nicu = dashboard.hospital_points(hospitals, "nicu", [], verified_only=True)
-        assert nicu["site"].tolist() == ["Banner Desert"]  # NICUs carry no verification flag
+        assert nicu["title"].tolist() == ["Banner Desert"]  # NICUs carry no verification flag
 
     def test_state_filter(self, dashboard: ModuleType, hospitals):
-        assert dashboard.hospital_points(hospitals, "trauma", ["AZ"])["site"].tolist() == [
+        assert dashboard.hospital_points(hospitals, "trauma", ["AZ"])["title"].tolist() == [
             "Phoenix Children's"
         ]
         assert dashboard.hospital_points(hospitals, "trauma", ["TX"]).empty
 
     def test_detail_text(self, dashboard: ModuleType, hospitals):
-        by_site = dashboard.hospital_points(hospitals, "trauma", []).set_index("site")["detail"]
+        by_site = dashboard.hospital_points(hospitals, "trauma", []).set_index("title")["detail"]
         assert by_site["Rhode Island Hospital"] == "Trauma center, level I - ACS verified"
         assert by_site["Phoenix Children's"] == "Trauma center, level not stated"
 
     def test_ring_colours_come_from_the_level(self, dashboard: ModuleType, hospitals):
-        points = dashboard.hospital_points(hospitals, "trauma", []).set_index("site")
+        points = dashboard.hospital_points(hospitals, "trauma", []).set_index("title")
         palette = dashboard.HOSPITAL_LAYERS["Trauma centers"]["palette"]
         expected = dashboard.hex_to_rgba(palette["I"], 255)
         assert points.loc["Rhode Island Hospital", "color"] == expected
@@ -500,35 +606,69 @@ def test_hospital_palettes_are_ordered_by_level_and_convert(dashboard: ModuleTyp
     assert list(dashboard.HOSPITAL_LAYERS["Trauma centers"]["palette"])[:2] == ["I", "II"]
 
 
-def test_provider_type_labels_match_the_snapshot_builder(dashboard: ModuleType):
-    """The app cannot import the pipeline, so its copies of these labels are pinned here."""
+def test_snapshot_labels_and_columns_match_the_snapshot_builder(dashboard: ModuleType):
+    """The app cannot import the pipeline, so its copies of these names are pinned here."""
     from providermap import map_data
 
-    assert dashboard.TYPE_FROM_SOURCE == map_data.TYPE_FROM_SOURCE
-    assert dashboard.TYPE_INFERRED == map_data.TYPE_INFERRED
+    assert dashboard.TYPE_COLUMNS == map_data.TYPE_COLUMNS
+    assert dashboard.CONFIDENCE_COLUMNS == map_data.CONFIDENCE_COLUMNS
+    assert dashboard.PRECISION_COLUMNS == map_data.PRECISION_COLUMNS
+    assert dashboard.LOCATIONS_FILE == map_data.LOCATIONS_NAME
+    assert dashboard.BY_STATE_FILE == map_data.BY_STATE_NAME
+    assert dashboard.BY_SPECIALTY_FILE == map_data.BY_SPECIALTY_NAME
+    assert dashboard.INFO_FILE == map_data.INFO_NAME
+    assert dashboard.MAP_STYLE  # used by the density view
     for provider_type in (map_data.TYPE_PHYSICIAN, map_data.TYPE_APP, map_data.TYPE_OTHER):
         assert provider_type in dashboard.COLORS
         assert dashboard.color_for(provider_type) != dashboard.DEFAULT_COLOR
 
 
+def test_every_column_the_app_reads_is_written_by_the_builder(dashboard: ModuleType):
+    snap = _snapshot(_provider_rows(), {"AdventHealth": ["FL"], "Rhode Island": ["RI"]})
+    assert set(dashboard.LOCATION_COLUMNS) <= set(snap.locations.columns)
+    needed = {"n_type_inferred", "map_points", "providers", *dashboard.PRECISION_COLUMNS.values()}
+    assert needed <= set(snap.by_state.columns)
+    assert {"dataset", "state", "specialty", "providers"} == set(snap.by_specialty.columns)
+
+
 def test_map_legend_lists_the_inferred_type_with_its_own_colour(app: AppTest):
+    app.sidebar.selectbox[0].select("Rhode Island").run()
     legend = next(m.value for m in app.markdown if "&#9679;" in m.value)
     assert "Other clinician" in legend
 
 
-def test_provider_card_says_when_the_type_was_inferred(app: AppTest):
-    app.text_input[0].set_value("catherine").run()
-    card = next(m.value for m in app.markdown if "**Provider type:**" in m.value)
-    assert "Other clinician (inferred from specialty)" in card
+def test_data_quality_tab_says_counts_only_and_explains_provider_type(app: AppTest):
+    text = " ".join(m.value for m in app.markdown) + " ".join(i.value for i in app.info)
+    assert "counts only" in text
+    assert "five or more providers" in text
+    assert "does not prove a credential" in text
+    assert {"Provider type", "Names on the map"} <= {s.value for s in app.subheader}
 
 
-def test_provider_card_does_not_flag_a_type_that_came_from_the_source(app: AppTest):
-    app.text_input[0].set_value("menezes").run()
-    card = next(m.value for m in app.markdown if "**Provider type:**" in m.value)
-    assert "Physician" in card and "inferred" not in card
+def test_the_committed_snapshot_holds_no_row_level_data():
+    """Only counts are published: no names, NPIs, profile links or phone numbers, and no database."""
+    data = REPO / "dashboard" / "data"
+    allowed = {
+        "locations.parquet",
+        "by_state.csv",
+        "by_specialty.csv",
+        "build_info.json",
+        "hospitals.parquet",
+    }
+    assert {p.name for p in data.iterdir()} <= allowed
+    for name in ("locations.parquet",):
+        columns = set(pd.read_parquet(data / name).columns)
+        assert not columns & {"name", "full_name", "npi", "profile_url", "phone", "credentials"}
+    assert not (data / "providers.parquet").exists()
 
 
-def test_data_quality_tab_explains_how_provider_type_was_decided(app: AppTest):
-    assert "Provider type" in [s.value for s in app.subheader]
-    explanation = next(m.value for m in app.markdown if "Inferred from specialty" in m.value)
-    assert "does not prove a credential" in explanation
+def test_no_database_or_export_file_is_tracked_by_git():
+    """Collected data stays out of the repository: no database, and no providers.xlsx export."""
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True
+        ).stdout.split("\n")
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("not a git checkout")
+    forbidden = (".db", ".sqlite", ".sqlite3", ".xlsx")
+    assert not [f for f in tracked if f.lower().endswith(forbidden) or ".db-" in f or ".db." in f]

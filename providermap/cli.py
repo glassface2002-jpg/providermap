@@ -247,7 +247,7 @@ def cmd_export_organizations(config: Config, args: argparse.Namespace) -> None:
 
 def cmd_build_map_data(config: Config, args: argparse.Namespace) -> None:
     from .geocode import census_client, geocode_addresses
-    from .map_data import build_info, build_snapshot, write_snapshot
+    from .map_data import build_snapshot, state_codes, write_snapshot
 
     inputs: dict[str, Path] = {}
     for spec in args.input:
@@ -257,17 +257,30 @@ def cmd_build_map_data(config: Config, args: argparse.Namespace) -> None:
             sys.exit(2)
         inputs[label] = Path(path)
 
+    names = [part for text in args.done_states for part in text.split(",") if part.strip()]
+    if args.done_dir:
+        names += [entry.stem for entry in Path(args.done_dir).iterdir()]
+    try:
+        done_states = state_codes(names) if names else None
+    except ValueError as err:
+        print(f"\n--done-states / --done-dir: {err}\n", file=sys.stderr)
+        sys.exit(2)
+
     cache_path = Path(config.cache.dir) / "geocode.csv"
-    with census_client(config.politeness.user_agent) as client:
-        snapshot = build_snapshot(
-            inputs, lambda addrs: geocode_addresses(addrs, cache_path, client)
-        )
+    try:
+        with census_client(config.politeness.user_agent) as client:
+            snapshot = build_snapshot(
+                inputs, lambda addrs: geocode_addresses(addrs, cache_path, client), done_states
+            )
+    except ValueError as err:
+        print(f"\n{err}\n", file=sys.stderr)
+        sys.exit(2)
     write_snapshot(snapshot, Path(args.out))
 
-    print(f"\nWrote {len(snapshot)} providers to {args.out}")
-    for label, stats in build_info(snapshot)["datasets"].items():
-        print(f"  {label}: {stats['providers']} providers, geocoded {stats['geocode_precision']}")
-    print()
+    print(f"\nWrote summaries of {snapshot.info['total_providers']:,} providers to {args.out}")
+    for label, stats in snapshot.info["datasets"].items():
+        print(f"  {label}: {stats['providers']:,} providers in {len(stats['states_done'])} states")
+    print(f"  {len(snapshot.locations):,} map points\n")
 
 
 def cmd_build_hospital_data(config: Config, args: argparse.Namespace) -> None:
@@ -1368,7 +1381,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         required=True,
         metavar="LABEL=PATH",
-        help='a providers.xlsx export and the dataset name to show for it, e.g. "AdventHealth=providers.xlsx" (repeatable)',
+        help=(
+            "a source and the dataset name to show for it: a providers.xlsx export or a COPY of a "
+            'database (never the live one), e.g. "AdventHealth=providers.xlsx" or '
+            '"Cigna=providermap-copy.db" (repeatable)'
+        ),
+    )
+    p.add_argument(
+        "--done-states",
+        action="append",
+        default=[],
+        metavar="ST,ST,...",
+        help="finished states, for a database input (comma-separated; repeatable); "
+        "unfinished states are left out",
+    )
+    p.add_argument(
+        "--done-dir",
+        default=None,
+        help="a folder holding one marker file per finished state, named by its two-letter code "
+        "(an alternative to --done-states)",
     )
     p.add_argument(
         "--out", default="dashboard/data", help="output directory (default: dashboard/data)"

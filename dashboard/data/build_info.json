@@ -1,33 +1,39 @@
 {
-  "built_at": "2026-10-16T14:09:47+00:00",
+  "built_at": "2026-10-20T20:59:29+00:00",
   "total_providers": 53174,
   "datasets": {
     "AdventHealth": {
       "providers": 10151,
-      "geocode_precision": {
-        "address": 9518,
-        "zip": 631,
-        "city": 2,
-        "none": 0
-      }
+      "states_done": [
+        "CO",
+        "FL",
+        "GA",
+        "IL",
+        "IN",
+        "KS",
+        "KY",
+        "MD",
+        "MO",
+        "NC",
+        "NE",
+        "OK",
+        "TN",
+        "TX",
+        "VA",
+        "WI"
+      ]
     },
     "Rhode Island": {
       "providers": 8434,
-      "geocode_precision": {
-        "address": 7832,
-        "zip": 602,
-        "city": 0,
-        "none": 0
-      }
+      "states_done": [
+        "RI"
+      ]
     },
     "Arizona": {
       "providers": 34589,
-      "geocode_precision": {
-        "address": 31016,
-        "zip": 3573,
-        "city": 0,
-        "none": 0
-      }
+      "states_done": [
+        "AZ"
+      ]
     }
   }
 }

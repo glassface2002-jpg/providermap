@@ -75,9 +75,9 @@ The Cigna FHIR adapter's design and evidence live in
   dataset exercises the entire pipeline with zero network access.
 - **Typed throughout** — dataclass models instead of untyped dicts, a clean
   mypy pass, Black + Ruff enforced in CI.
-- **Map dashboard** — a Streamlit app that plots geocoded providers on an
-  interactive map, with filters, charts, and a data-quality tab; see
-  [Map dashboard](#map-dashboard).
+- **Map dashboard** — a Streamlit app that shows provider counts on a national
+  overview and on per-state maps, with charts and a data-quality tab. It
+  publishes counts only, never provider rows; see [Map dashboard](#map-dashboard).
 - **Organizations** — a parallel `OrganizationAdapter` track auto-fetches
   CMS's public hospital dataset (no manual download) into a
   `provider → organization → location` model, enriches websites from
@@ -466,19 +466,35 @@ pass the export to the dashboard builder, e.g.
 
 ## Map dashboard
 
-`dashboard/app.py` is a [Streamlit](https://streamlit.io) app that shows
-providers on an interactive map: filter by dataset, state, specialty, provider
-type, and site confidence; switch between a location map and a density view;
-click markers to list the providers there; and read a Data quality tab that
-says how precisely each dataset was placed.
+`dashboard/app.py` is a [Streamlit](https://streamlit.io) app with four tabs:
+
+- **National overview** - providers per state on a US map for the chosen dataset.
+  States the dataset has no data for (a state's run not finished yet, or one the source
+  does not cover) are grey, and the tab shows how many states are covered and the
+  snapshot's "as of" date. Counts are providers listed in each source directory
+  (for Cigna: its network), not every provider in a state.
+- **Map** - one or more states as dots (size = providers at that place, colour = the most
+  common provider type or site confidence there), a density view, and optional trauma-center
+  and NICU rings. Click a dot for its counts.
+- **Insights** - top specialties, provider type, site confidence and top cities.
+- **Data quality** - how precisely each dataset was placed, and what the labels mean.
+
+**Counts only.** The app never holds provider names, NPIs, phone numbers or profile
+links. `build-map-data` reads the provider rows, places them on the map, and writes
+only summaries: how many providers are at each point (split by type and confidence), and
+counts by state and by specialty. A site name and street address are kept only for points
+with five or more providers (a clinic or hospital, not one person's office). A test checks
+that no database or export file is tracked by git and that the published files carry no
+person-level columns.
 
 ```bash
 pip install -e ".[dashboard]"
 
-# 1. Geocode one or more providers.xlsx exports into the dashboard's snapshot
+# 1. Summarize one or more sources into the dashboard's files. A source is a providers.xlsx
+#    export, or a COPY of a pipeline database (never the live file of a run in progress).
 providermap build-map-data \
     --input "AdventHealth=exports/output/providers.xlsx" \
-    --input "Another run=path/to/other_providers.xlsx"
+    --input "Cigna=providermap-copy.db" --done-states "AK,AL,AR"
 
 # 2. Optional: trauma-center and NICU layers from two CSVs
 providermap build-hospital-data --trauma trauma_centers.csv --nicu nicu_centers.csv
@@ -487,18 +503,24 @@ providermap build-hospital-data --trauma trauma_centers.csv --nicu nicu_centers.
 streamlit run dashboard/app.py
 ```
 
+For a database source, `--done-states` (or `--done-dir`, a folder with one marker file per
+finished state, named by its two-letter code) lists the states whose run finished. Only
+those states are counted, because an unfinished state holds part of its providers and a
+partial count would read as a real one. A database input without the list is refused.
+
 `build-map-data` geocodes with the free US Census batch geocoder (no API key).
 Addresses it cannot match at street level fall back to the centre of their ZIP
-code and are labelled as such; addresses with no usable ZIP are kept in the
-counts but left off the map. Addresses with no street or ZIP match fall back to
-their ZIP code, then city. Answers are cached in `.cache/geocode.csv`, so a rerun
-only sends addresses it has not seen. A dataset whose source records no provider
-type (Cigna's directory carries no credentials) gets one inferred from the
-specialty name - Physician, Advanced Practice Provider, or Other clinician - and
-the dashboard marks those as inferred; a dataset's own types are never overwritten. The output is small files
-(`dashboard/data/providers.parquet`, `build_info.json`, and `hospitals.parquet`
-if you built the hospital layers), which are committed:
-the app reads only those, so it needs neither the pipeline nor the database.
+code and are labelled as such; with no street or ZIP match they fall back to
+their city, and addresses with nothing usable are kept in the counts but left off
+the map. Answers are cached in `.cache/geocode.csv`, so a rerun only sends addresses
+it has not seen. A dataset whose source records no provider type (Cigna's directory
+carries no credentials) gets one inferred from the specialty name - Physician,
+Advanced Practice Provider, or Other clinician - and the dashboard marks those as
+inferred; a dataset's own types are never overwritten. The output is small files in
+`dashboard/data/` (`locations.parquet`, `by_state.csv`, `by_specialty.csv`,
+`build_info.json`, and `hospitals.parquet` if you built the hospital layers); the app
+reads only those, so it needs neither the pipeline nor the database. A map draws at most
+25,000 points at once, so a big dataset starts on its biggest state.
 
 To publish it, create a free app at [share.streamlit.io](https://share.streamlit.io)
 pointing at this repository with `dashboard/app.py` as the main file; it
@@ -598,7 +620,7 @@ providermap/
 │   ├── database.py                  SQLite schema, migrations, dedupe
 │   ├── exporter.py                   Excel export
 │   ├── geocode.py                    Census batch geocoder + ZIP fallback + cache
-│   ├── map_data.py                   builds the dashboard's geocoded snapshot
+│   ├── map_data.py                   builds the dashboard's counts-only summaries
 │   ├── discover.py                    site analysis / investigation
 │   ├── parser_utils.py                 generic parsing (NPI checksum, vCard,
 │   │                                     JSON-LD, ...)
@@ -618,7 +640,7 @@ providermap/
 ├── dashboard/               Streamlit map dashboard (reads data/ only)
 │   ├── app.py
 │   ├── requirements.txt       what Streamlit Cloud installs
-│   └── data/                  committed snapshot (providers.parquet, build_info.json)
+│   └── data/                  committed counts-only summaries
 ├── tests/                   pytest suite, fully offline
 ├── database/  logs/  exports/output/    (gitignored - generated at runtime)
 ├── config.example.yaml

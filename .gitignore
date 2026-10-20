@@ -28,7 +28,9 @@ database/
 *.sqlite3
 .cache/
 
-# Generated exports
+# Generated exports. Provider-level files (providers.xlsx and friends) are the collected data
+# itself, so they stay out of git too; the dashboard publishes counts only.
+*.xlsx
 exports/output/
 # Same as above - a specific staging/pilot run's real ingested output.
 exports/output_staging*/

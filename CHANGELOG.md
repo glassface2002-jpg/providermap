@@ -7,6 +7,27 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The dashboard now publishes counts only.** `providermap build-map-data` no longer
+  writes provider rows. It writes `locations.parquet` (one row per map point with
+  provider counts by type and confidence, top specialties, and a site name and street
+  address only where five or more providers share the point), `by_state.csv`,
+  `by_specialty.csv` and `build_info.json`. Names, NPIs, phone numbers and profile links
+  are never read. The "Find a provider" tab, the specialty and accepting-new-patients
+  filters and the click-to-list provider table are gone; clicking a dot shows counts.
+  A test fails if the committed snapshot has person-level columns or if git tracks a
+  database or `providers.xlsx` file, and `*.xlsx` is now gitignored.
+- **National overview tab.** US map of providers per state for the chosen dataset, grey
+  where the dataset has no data, with states covered, an "as of" date, and a note that
+  counts are providers listed in each source directory, not all providers in a state.
+  Datasets are now chosen one at a time (the one with the most providers is the default).
+- **`build-map-data` reads a database copy.** `--input "Cigna=copy.db"` summarizes the
+  active providers of a copy of a pipeline database, read-only, limited to finished
+  states given by `--done-states` or `--done-dir`. A database without that list is
+  refused. A map draws at most 25,000 points, and a dataset above that starts on its
+  biggest state.
+
 ### Added
 
 - **Provider type inferred from specialty where the source has none.** Cigna's

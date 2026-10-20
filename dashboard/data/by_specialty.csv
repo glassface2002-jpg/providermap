@@ -1,0 +1,966 @@
+dataset,state,specialty,providers
+AdventHealth,CO,Advanced Practice Midwife,19
+AdventHealth,CO,Allergy & Immunology,4
+AdventHealth,CO,Anesthesiology,2
+AdventHealth,CO,"Anesthesiology, Pain Medicine",1
+AdventHealth,CO,Audiologist,4
+AdventHealth,CO,Clinical Neuropsychologist,1
+AdventHealth,CO,Clinical Nurse Specialist,2
+AdventHealth,CO,"Clinical Nurse Specialist, Critical Care Medicine",1
+AdventHealth,CO,Colon & Rectal Surgery,11
+AdventHealth,CO,Counselor,1
+AdventHealth,CO,"Counselor, Professional",8
+AdventHealth,CO,"Dentist, Oral and Maxillofacial Surgery",15
+AdventHealth,CO,Dermatology,4
+AdventHealth,CO,Family Medicine,107
+AdventHealth,CO,"Family Medicine, Hospice and Palliative Medicine",1
+AdventHealth,CO,"Family Medicine, Sports Medicine",2
+AdventHealth,CO,Hospitalist,50
+AdventHealth,CO,Internal Medicine,76
+AdventHealth,CO,"Internal Medicine, Cardiovascular Disease",19
+AdventHealth,CO,"Internal Medicine, Clinical Cardiac Electrophysiology",10
+AdventHealth,CO,"Internal Medicine, Critical Care Medicine",25
+AdventHealth,CO,"Internal Medicine, Endocrinology, Diabetes & Metabolism",1
+AdventHealth,CO,"Internal Medicine, Gastroenterology",47
+AdventHealth,CO,"Internal Medicine, Hematology & Oncology",11
+AdventHealth,CO,"Internal Medicine, Infectious Disease",28
+AdventHealth,CO,"Internal Medicine, Interventional Cardiology",14
+AdventHealth,CO,"Internal Medicine, Nephrology",29
+AdventHealth,CO,"Internal Medicine, Pulmonary Disease",5
+AdventHealth,CO,"Internal Medicine, Rheumatology",1
+AdventHealth,CO,"Internal Medicine, Transplant Hepatology",1
+AdventHealth,CO,Neurological Surgery,24
+AdventHealth,CO,"Nurse Anesthetist, Certified Registered",44
+AdventHealth,CO,Nurse Practitioner,40
+AdventHealth,CO,"Nurse Practitioner, Acute Care",15
+AdventHealth,CO,"Nurse Practitioner, Adult Health",11
+AdventHealth,CO,"Nurse Practitioner, Family",60
+AdventHealth,CO,"Nurse Practitioner, Gerontology",4
+AdventHealth,CO,"Nurse Practitioner, Obstetrics & Gynecology",3
+AdventHealth,CO,"Nurse Practitioner, Pediatrics",3
+AdventHealth,CO,"Nurse Practitioner, Primary Care",2
+AdventHealth,CO,"Nurse Practitioner, Women's Health",8
+AdventHealth,CO,Obstetrics & Gynecology,77
+AdventHealth,CO,"Obstetrics & Gynecology, Critical Care Medicine",1
+AdventHealth,CO,"Obstetrics & Gynecology, Gynecologic Oncology",5
+AdventHealth,CO,"Obstetrics & Gynecology, Gynecology",2
+AdventHealth,CO,"Obstetrics & Gynecology, Maternal & Fetal Medicine",12
+AdventHealth,CO,"Obstetrics & Gynecology, Obstetrics",3
+AdventHealth,CO,"Obstetrics & Gynecology, Reproductive Endocrinology",4
+AdventHealth,CO,"Obstetrics & Gynecology, Urogynecology and Reconstructive Pelvic Surgery",4
+AdventHealth,CO,Ophthalmology,24
+AdventHealth,CO,"Ophthalmology, Ophthalmic Plastic and Reconstructive Surgery",4
+AdventHealth,CO,"Ophthalmology, Pediatric Ophthalmology and Strabismus Specialist",6
+AdventHealth,CO,"Ophthalmology, Retina Specialist",6
+AdventHealth,CO,Oral & Maxillofacial Surgery,3
+AdventHealth,CO,Orthopaedic Surgery,45
+AdventHealth,CO,"Orthopaedic Surgery, Adult Reconstructive Orthopaedic Surgery",5
+AdventHealth,CO,"Orthopaedic Surgery, Foot and Ankle Surgery",3
+AdventHealth,CO,"Orthopaedic Surgery, Hand Surgery",18
+AdventHealth,CO,"Orthopaedic Surgery, Orthopaedic Surgery of the Spine",10
+AdventHealth,CO,"Orthopaedic Surgery, Sports Medicine",10
+AdventHealth,CO,Otolaryngology,20
+AdventHealth,CO,"Otolaryngology, Facial Plastic Surgery",5
+AdventHealth,CO,"Otolaryngology, Otolaryngic Allergy",1
+AdventHealth,CO,"Otolaryngology, Otolaryngology/Facial Plastic Surgery",4
+AdventHealth,CO,"Otolaryngology, Otology & Neurotology",2
+AdventHealth,CO,"Otolaryngology, Plastic Surgery within the Head & Neck",1
+AdventHealth,CO,"Otolaryngology, Sleep Medicine",1
+AdventHealth,CO,"Pain Medicine, Interventional Pain Medicine",3
+AdventHealth,CO,Pediatrics,62
+AdventHealth,CO,"Pediatrics, Adolescent Medicine",1
+AdventHealth,CO,"Pediatrics, Pediatric Cardiology",10
+AdventHealth,CO,"Pediatrics, Pediatric Gastroenterology",2
+AdventHealth,CO,Physical Medicine & Rehabilitation,12
+AdventHealth,CO,"Physical Medicine & Rehabilitation, Pain Medicine",1
+AdventHealth,CO,Physician Assistant,132
+AdventHealth,CO,"Physician Assistant, Medical",25
+AdventHealth,CO,"Physician Assistant, Surgical",44
+AdventHealth,CO,Plastic Surgery,6
+AdventHealth,CO,Podiatrist,12
+AdventHealth,CO,"Podiatrist, Foot & Ankle Surgery",19
+AdventHealth,CO,"Psychiatry & Neurology, Epilepsy",5
+AdventHealth,CO,"Psychiatry & Neurology, Neurology",15
+AdventHealth,CO,"Psychiatry & Neurology, Neurology with Special Qualifications in Child Neurology",1
+AdventHealth,CO,"Psychiatry & Neurology, Psychiatry",1
+AdventHealth,CO,Psychologist,1
+AdventHealth,CO,"Psychologist, Clinical",1
+AdventHealth,CO,"Psychologist, Counseling",1
+AdventHealth,CO,"Radiology, Diagnostic Radiology",2
+AdventHealth,CO,"Radiology, Vascular & Interventional Radiology",6
+AdventHealth,CO,"Social Worker, Clinical",15
+AdventHealth,CO,Specialist,8
+AdventHealth,CO,Student in an Organized Health Care Education/Training Program,1
+AdventHealth,CO,Surgery,49
+AdventHealth,CO,"Surgery, Plastic and Reconstructive Surgery",7
+AdventHealth,CO,"Surgery, Surgical Critical Care",1
+AdventHealth,CO,"Surgery, Surgical Oncology",1
+AdventHealth,CO,Thoracic Surgery (Cardiothoracic Vascular Surgery),4
+AdventHealth,CO,Transplant Surgery,6
+AdventHealth,CO,Unknown,10
+AdventHealth,CO,Urology,30
+AdventHealth,FL,Advanced Practice Midwife,43
+AdventHealth,FL,Allergy & Immunology,15
+AdventHealth,FL,"Allergy & Immunology, Allergy",6
+AdventHealth,FL,Anesthesiology,4
+AdventHealth,FL,"Anesthesiology, Critical Care Medicine",1
+AdventHealth,FL,"Anesthesiology, Pain Medicine",12
+AdventHealth,FL,Audiologist,10
+AdventHealth,FL,Behavior Technician,1
+AdventHealth,FL,Chiropractor,1
+AdventHealth,FL,"Clinic/Center, Primary Care",1
+AdventHealth,FL,Clinical Neuropsychologist,10
+AdventHealth,FL,"Clinical Nurse Specialist, Adult Health",1
+AdventHealth,FL,"Clinical Nurse Specialist, Oncology",1
+AdventHealth,FL,Colon & Rectal Surgery,21
+AdventHealth,FL,Counselor,1
+AdventHealth,FL,"Counselor, Mental Health",16
+AdventHealth,FL,Dentist,4
+AdventHealth,FL,"Dentist, General Practice",2
+AdventHealth,FL,"Dentist, Oral and Maxillofacial Surgery",23
+AdventHealth,FL,"Dentist, Pediatric Dentistry",6
+AdventHealth,FL,Dermatology,51
+AdventHealth,FL,"Dermatology, Clinical & Laboratory Dermatological Immunology",1
+AdventHealth,FL,"Dermatology, MOHS-Micrographic Surgery",8
+AdventHealth,FL,"Dermatology, Pediatric Dermatology",2
+AdventHealth,FL,"Dermatology, Procedural Dermatology",5
+AdventHealth,FL,Emergency Medicine,4
+AdventHealth,FL,"Emergency Medicine, Undersea and Hyperbaric Medicine",2
+AdventHealth,FL,Family Medicine,462
+AdventHealth,FL,"Family Medicine, Addiction Medicine",2
+AdventHealth,FL,"Family Medicine, Adult Medicine",4
+AdventHealth,FL,"Family Medicine, Bariatric Medicine",1
+AdventHealth,FL,"Family Medicine, Geriatric Medicine",7
+AdventHealth,FL,"Family Medicine, Hospice and Palliative Medicine",2
+AdventHealth,FL,"Family Medicine, Sleep Medicine",2
+AdventHealth,FL,"Family Medicine, Sports Medicine",15
+AdventHealth,FL,General Practice,64
+AdventHealth,FL,Hospitalist,28
+AdventHealth,FL,Internal Medicine,379
+AdventHealth,FL,"Internal Medicine, Adolescent Medicine",1
+AdventHealth,FL,"Internal Medicine, Advanced Heart Failure and Transplant Cardiology",6
+AdventHealth,FL,"Internal Medicine, Allergy & Immunology",2
+AdventHealth,FL,"Internal Medicine, Cardiovascular Disease",210
+AdventHealth,FL,"Internal Medicine, Clinical Cardiac Electrophysiology",35
+AdventHealth,FL,"Internal Medicine, Critical Care Medicine",28
+AdventHealth,FL,"Internal Medicine, Endocrinology, Diabetes & Metabolism",45
+AdventHealth,FL,"Internal Medicine, Gastroenterology",182
+AdventHealth,FL,"Internal Medicine, Geriatric Medicine",10
+AdventHealth,FL,"Internal Medicine, Hematology",4
+AdventHealth,FL,"Internal Medicine, Hematology & Oncology",50
+AdventHealth,FL,"Internal Medicine, Hepatology",2
+AdventHealth,FL,"Internal Medicine, Hospice and Palliative Medicine",7
+AdventHealth,FL,"Internal Medicine, Infectious Disease",87
+AdventHealth,FL,"Internal Medicine, Interventional Cardiology",143
+AdventHealth,FL,"Internal Medicine, Medical Oncology",96
+AdventHealth,FL,"Internal Medicine, Nephrology",138
+AdventHealth,FL,"Internal Medicine, Pulmonary Disease",94
+AdventHealth,FL,"Internal Medicine, Rheumatology",29
+AdventHealth,FL,"Internal Medicine, Sleep Medicine",5
+AdventHealth,FL,"Internal Medicine, Transplant Hepatology",2
+AdventHealth,FL,"Medical Genetics, Clinical Genetics (M.D.)",4
+AdventHealth,FL,Midwife,2
+AdventHealth,FL,Neurological Surgery,51
+AdventHealth,FL,Neuromusculoskeletal Medicine & OMM,4
+AdventHealth,FL,"Nuclear Medicine, Nuclear Cardiology",1
+AdventHealth,FL,Nurse Practitioner,120
+AdventHealth,FL,"Nurse Practitioner, Acute Care",39
+AdventHealth,FL,"Nurse Practitioner, Adult Health",52
+AdventHealth,FL,"Nurse Practitioner, Critical Care Medicine",2
+AdventHealth,FL,"Nurse Practitioner, Family",499
+AdventHealth,FL,"Nurse Practitioner, Gerontology",53
+AdventHealth,FL,"Nurse Practitioner, Neonatal",4
+AdventHealth,FL,"Nurse Practitioner, Obstetrics & Gynecology",4
+AdventHealth,FL,"Nurse Practitioner, Pediatrics",28
+AdventHealth,FL,"Nurse Practitioner, Pediatrics, Critical Care",1
+AdventHealth,FL,"Nurse Practitioner, Perinatal",1
+AdventHealth,FL,"Nurse Practitioner, Primary Care",26
+AdventHealth,FL,"Nurse Practitioner, Psych/Mental Health",22
+AdventHealth,FL,"Nurse Practitioner, Women's Health",15
+AdventHealth,FL,Obstetrics & Gynecology,219
+AdventHealth,FL,"Obstetrics & Gynecology, Gynecologic Oncology",13
+AdventHealth,FL,"Obstetrics & Gynecology, Gynecology",22
+AdventHealth,FL,"Obstetrics & Gynecology, Maternal & Fetal Medicine",21
+AdventHealth,FL,"Obstetrics & Gynecology, Obstetrics",7
+AdventHealth,FL,"Obstetrics & Gynecology, Reproductive Endocrinology",15
+AdventHealth,FL,"Obstetrics & Gynecology, Urogynecology and Reconstructive Pelvic Surgery",11
+AdventHealth,FL,Ophthalmology,88
+AdventHealth,FL,"Ophthalmology, Cornea and External Diseases Specialist",2
+AdventHealth,FL,"Ophthalmology, Glaucoma Specialist",2
+AdventHealth,FL,"Ophthalmology, Neuro-ophthalmology",1
+AdventHealth,FL,"Ophthalmology, Ophthalmic Plastic and Reconstructive Surgery",2
+AdventHealth,FL,"Ophthalmology, Pediatric Ophthalmology and Strabismus Specialist",3
+AdventHealth,FL,"Ophthalmology, Retina Specialist",5
+AdventHealth,FL,Optometrist,1
+AdventHealth,FL,Oral & Maxillofacial Surgery,3
+AdventHealth,FL,Orthopaedic Surgery,148
+AdventHealth,FL,"Orthopaedic Surgery, Adult Reconstructive Orthopaedic Surgery",9
+AdventHealth,FL,"Orthopaedic Surgery, Foot and Ankle Surgery",4
+AdventHealth,FL,"Orthopaedic Surgery, Hand Surgery",19
+AdventHealth,FL,"Orthopaedic Surgery, Orthopaedic Surgery of the Spine",22
+AdventHealth,FL,"Orthopaedic Surgery, Orthopaedic Trauma",4
+AdventHealth,FL,"Orthopaedic Surgery, Pediatric Orthopaedic Surgery",4
+AdventHealth,FL,"Orthopaedic Surgery, Sports Medicine",18
+AdventHealth,FL,Otolaryngology,56
+AdventHealth,FL,"Otolaryngology, Facial Plastic Surgery",6
+AdventHealth,FL,"Otolaryngology, Otolaryngology/Facial Plastic Surgery",11
+AdventHealth,FL,"Otolaryngology, Otology & Neurotology",1
+AdventHealth,FL,"Otolaryngology, Pediatric Otolaryngology",6
+AdventHealth,FL,"Otolaryngology, Plastic Surgery within the Head & Neck",3
+AdventHealth,FL,"Pain Medicine, Interventional Pain Medicine",21
+AdventHealth,FL,"Pathology, Anatomic Pathology & Clinical Pathology",3
+AdventHealth,FL,Pediatrics,231
+AdventHealth,FL,"Pediatrics, Adolescent Medicine",7
+AdventHealth,FL,"Pediatrics, Developmental - Behavioral Pediatrics",2
+AdventHealth,FL,"Pediatrics, Hospice and Palliative Medicine",1
+AdventHealth,FL,"Pediatrics, Neonatal-Perinatal Medicine",2
+AdventHealth,FL,"Pediatrics, Obesity Medicine",1
+AdventHealth,FL,"Pediatrics, Pediatric Allergy/Immunology",1
+AdventHealth,FL,"Pediatrics, Pediatric Cardiology",13
+AdventHealth,FL,"Pediatrics, Pediatric Endocrinology",3
+AdventHealth,FL,"Pediatrics, Pediatric Gastroenterology",12
+AdventHealth,FL,"Pediatrics, Pediatric Hematology-Oncology",8
+AdventHealth,FL,"Pediatrics, Pediatric Infectious Diseases",3
+AdventHealth,FL,"Pediatrics, Pediatric Nephrology",4
+AdventHealth,FL,"Pediatrics, Pediatric Pulmonology",9
+AdventHealth,FL,"Pediatrics, Pediatric Rheumatology",2
+AdventHealth,FL,"Pediatrics, Pediatric Transplant Hepatology",1
+AdventHealth,FL,"Pediatrics, Sports Medicine",1
+AdventHealth,FL,Phlebology,1
+AdventHealth,FL,Physical Medicine & Rehabilitation,42
+AdventHealth,FL,"Physical Medicine & Rehabilitation, Pain Medicine",15
+AdventHealth,FL,"Physical Medicine & Rehabilitation, Pediatric Rehabilitation Medicine",2
+AdventHealth,FL,"Physical Medicine & Rehabilitation, Spinal Cord Injury Medicine",1
+AdventHealth,FL,"Physical Medicine & Rehabilitation, Sports Medicine",3
+AdventHealth,FL,Physician Assistant,339
+AdventHealth,FL,"Physician Assistant, Medical",49
+AdventHealth,FL,"Physician Assistant, Surgical",43
+AdventHealth,FL,Plastic Surgery,45
+AdventHealth,FL,"Plastic Surgery, Surgery of the Hand",4
+AdventHealth,FL,Podiatrist,50
+AdventHealth,FL,"Podiatrist, Foot & Ankle Surgery",112
+AdventHealth,FL,"Podiatrist, Primary Podiatric Medicine",3
+AdventHealth,FL,"Preventive Medicine, Undersea and Hyperbaric Medicine",1
+AdventHealth,FL,"Psychiatry & Neurology, Child & Adolescent Psychiatry",3
+AdventHealth,FL,"Psychiatry & Neurology, Diagnostic Neuroimaging",3
+AdventHealth,FL,"Psychiatry & Neurology, Epilepsy",2
+AdventHealth,FL,"Psychiatry & Neurology, Neurology",65
+AdventHealth,FL,"Psychiatry & Neurology, Neurology with Special Qualifications in Child Neurology",7
+AdventHealth,FL,"Psychiatry & Neurology, Neuromuscular Medicine",2
+AdventHealth,FL,"Psychiatry & Neurology, Psychiatry",20
+AdventHealth,FL,"Psychiatry & Neurology, Sleep Medicine",1
+AdventHealth,FL,"Psychiatry & Neurology, Vascular Neurology",1
+AdventHealth,FL,Psychologist,9
+AdventHealth,FL,"Psychologist, Clinical",2
+AdventHealth,FL,"Radiology, Diagnostic Radiology",2
+AdventHealth,FL,"Radiology, Vascular & Interventional Radiology",4
+AdventHealth,FL,Social Worker,1
+AdventHealth,FL,"Social Worker, Clinical",10
+AdventHealth,FL,Specialist,57
+AdventHealth,FL,"Speech-Language Pathologist,  ",4
+AdventHealth,FL,Student in an Organized Health Care Education/Training Program,158
+AdventHealth,FL,Surgery,173
+AdventHealth,FL,"Surgery, Pediatric Surgery",7
+AdventHealth,FL,"Surgery, Plastic and Reconstructive Surgery",16
+AdventHealth,FL,"Surgery, Surgery of the Hand",6
+AdventHealth,FL,"Surgery, Surgical Critical Care",4
+AdventHealth,FL,"Surgery, Surgical Oncology",2
+AdventHealth,FL,"Surgery, Trauma Surgery",2
+AdventHealth,FL,Thoracic Surgery (Cardiothoracic Vascular Surgery),40
+AdventHealth,FL,Transplant Surgery,4
+AdventHealth,FL,Unknown,117
+AdventHealth,FL,Urology,117
+AdventHealth,FL,"Urology, Pediatric Urology",5
+AdventHealth,GA,Advanced Practice Midwife,1
+AdventHealth,GA,Audiologist,1
+AdventHealth,GA,Chiropractor,1
+AdventHealth,GA,Emergency Medicine,1
+AdventHealth,GA,"Emergency Medicine, Undersea and Hyperbaric Medicine",1
+AdventHealth,GA,Family Medicine,28
+AdventHealth,GA,Internal Medicine,24
+AdventHealth,GA,"Internal Medicine, Cardiovascular Disease",11
+AdventHealth,GA,"Internal Medicine, Clinical Cardiac Electrophysiology",1
+AdventHealth,GA,"Internal Medicine, Hematology & Oncology",2
+AdventHealth,GA,"Internal Medicine, Infectious Disease",2
+AdventHealth,GA,"Internal Medicine, Interventional Cardiology",1
+AdventHealth,GA,"Internal Medicine, Nephrology",1
+AdventHealth,GA,Neurological Surgery,5
+AdventHealth,GA,Nurse Practitioner,16
+AdventHealth,GA,"Nurse Practitioner, Acute Care",2
+AdventHealth,GA,"Nurse Practitioner, Family",33
+AdventHealth,GA,"Nurse Practitioner, Gerontology",1
+AdventHealth,GA,Obstetrics & Gynecology,3
+AdventHealth,GA,Ophthalmology,1
+AdventHealth,GA,Orthopaedic Surgery,2
+AdventHealth,GA,"Orthopaedic Surgery, Sports Medicine",1
+AdventHealth,GA,Otolaryngology,1
+AdventHealth,GA,"Pain Medicine, Interventional Pain Medicine",1
+AdventHealth,GA,Pediatrics,1
+AdventHealth,GA,"Physical Medicine & Rehabilitation, Pain Medicine",1
+AdventHealth,GA,Physician Assistant,24
+AdventHealth,GA,"Physician Assistant, Medical",1
+AdventHealth,GA,"Psychiatry & Neurology, Vascular Neurology",1
+AdventHealth,GA,Specialist,1
+AdventHealth,GA,Surgery,6
+AdventHealth,GA,Thoracic Surgery (Cardiothoracic Vascular Surgery),2
+AdventHealth,GA,Unknown,2
+AdventHealth,GA,Urology,9
+AdventHealth,IL,Advanced Practice Midwife,7
+AdventHealth,IL,Allergy & Immunology,7
+AdventHealth,IL,"Anesthesiology, Pain Medicine",13
+AdventHealth,IL,Audiologist,10
+AdventHealth,IL,Clinical Neuropsychologist,1
+AdventHealth,IL,"Clinical Nurse Specialist, Acute Care",1
+AdventHealth,IL,Colon & Rectal Surgery,1
+AdventHealth,IL,"Counselor, Professional",1
+AdventHealth,IL,Dentist,1
+AdventHealth,IL,"Dentist, General Practice",2
+AdventHealth,IL,"Dentist, Oral and Maxillofacial Pathology",1
+AdventHealth,IL,"Dentist, Oral and Maxillofacial Surgery",9
+AdventHealth,IL,"Dentist, Pediatric Dentistry",3
+AdventHealth,IL,Dermatology,16
+AdventHealth,IL,"Dermatology, MOHS-Micrographic Surgery",4
+AdventHealth,IL,"Dietitian, Registered",1
+AdventHealth,IL,Emergency Medicine,1
+AdventHealth,IL,Family Medicine,143
+AdventHealth,IL,"Family Medicine, Adolescent Medicine",1
+AdventHealth,IL,"Family Medicine, Geriatric Medicine",3
+AdventHealth,IL,"Family Medicine, Sleep Medicine",1
+AdventHealth,IL,"Family Medicine, Sports Medicine",3
+AdventHealth,IL,Hospitalist,3
+AdventHealth,IL,Internal Medicine,72
+AdventHealth,IL,"Internal Medicine, Advanced Heart Failure and Transplant Cardiology",2
+AdventHealth,IL,"Internal Medicine, Allergy & Immunology",2
+AdventHealth,IL,"Internal Medicine, Cardiovascular Disease",22
+AdventHealth,IL,"Internal Medicine, Clinical Cardiac Electrophysiology",8
+AdventHealth,IL,"Internal Medicine, Critical Care Medicine",2
+AdventHealth,IL,"Internal Medicine, Endocrinology, Diabetes & Metabolism",7
+AdventHealth,IL,"Internal Medicine, Gastroenterology",29
+AdventHealth,IL,"Internal Medicine, Geriatric Medicine",3
+AdventHealth,IL,"Internal Medicine, Hematology & Oncology",13
+AdventHealth,IL,"Internal Medicine, Infectious Disease",21
+AdventHealth,IL,"Internal Medicine, Interventional Cardiology",18
+AdventHealth,IL,"Internal Medicine, Medical Oncology",1
+AdventHealth,IL,"Internal Medicine, Nephrology",28
+AdventHealth,IL,"Internal Medicine, Pulmonary Disease",9
+AdventHealth,IL,"Internal Medicine, Rheumatology",7
+AdventHealth,IL,"Internal Medicine, Sports Medicine",1
+AdventHealth,IL,Legal Medicine,2
+AdventHealth,IL,Neurological Surgery,4
+AdventHealth,IL,Nurse Practitioner,12
+AdventHealth,IL,"Nurse Practitioner, Acute Care",3
+AdventHealth,IL,"Nurse Practitioner, Adult Health",1
+AdventHealth,IL,"Nurse Practitioner, Family",26
+AdventHealth,IL,"Nurse Practitioner, Gerontology",1
+AdventHealth,IL,"Nurse Practitioner, Women's Health",2
+AdventHealth,IL,Obstetrics & Gynecology,36
+AdventHealth,IL,"Obstetrics & Gynecology, Gynecologic Oncology",8
+AdventHealth,IL,"Obstetrics & Gynecology, Gynecology",3
+AdventHealth,IL,"Obstetrics & Gynecology, Maternal & Fetal Medicine",2
+AdventHealth,IL,"Obstetrics & Gynecology, Obstetrics",1
+AdventHealth,IL,"Obstetrics & Gynecology, Reproductive Endocrinology",3
+AdventHealth,IL,"Obstetrics & Gynecology, Urogynecology and Reconstructive Pelvic Surgery",4
+AdventHealth,IL,Ophthalmology,18
+AdventHealth,IL,"Ophthalmology, Retina Specialist",8
+AdventHealth,IL,Oral & Maxillofacial Surgery,1
+AdventHealth,IL,Orthopaedic Surgery,59
+AdventHealth,IL,"Orthopaedic Surgery, Adult Reconstructive Orthopaedic Surgery",6
+AdventHealth,IL,"Orthopaedic Surgery, Foot and Ankle Surgery",2
+AdventHealth,IL,"Orthopaedic Surgery, Hand Surgery",8
+AdventHealth,IL,"Orthopaedic Surgery, Orthopaedic Surgery of the Spine",4
+AdventHealth,IL,"Orthopaedic Surgery, Orthopaedic Trauma",1
+AdventHealth,IL,"Orthopaedic Surgery, Sports Medicine",10
+AdventHealth,IL,Otolaryngology,9
+AdventHealth,IL,"Otolaryngology, Otolaryngology/Facial Plastic Surgery",2
+AdventHealth,IL,"Otolaryngology, Otology & Neurotology",1
+AdventHealth,IL,"Otolaryngology, Sleep Medicine",1
+AdventHealth,IL,"Pain Medicine, Interventional Pain Medicine",7
+AdventHealth,IL,Pediatrics,73
+AdventHealth,IL,"Pediatrics, Pediatric Cardiology",1
+AdventHealth,IL,"Pediatrics, Pediatric Critical Care Medicine",1
+AdventHealth,IL,"Pediatrics, Pediatric Endocrinology",2
+AdventHealth,IL,"Pediatrics, Pediatric Infectious Diseases",1
+AdventHealth,IL,"Pediatrics, Pediatric Pulmonology",1
+AdventHealth,IL,"Pediatrics, Sports Medicine",1
+AdventHealth,IL,Phlebology,1
+AdventHealth,IL,Physical Medicine & Rehabilitation,20
+AdventHealth,IL,"Physical Medicine & Rehabilitation, Pain Medicine",5
+AdventHealth,IL,"Physical Medicine & Rehabilitation, Sports Medicine",2
+AdventHealth,IL,Physician Assistant,9
+AdventHealth,IL,"Physician Assistant, Medical",1
+AdventHealth,IL,Plastic Surgery,7
+AdventHealth,IL,"Plastic Surgery, Surgery of the Hand",1
+AdventHealth,IL,Podiatrist,6
+AdventHealth,IL,"Podiatrist, Foot & Ankle Surgery",41
+AdventHealth,IL,"Podiatrist, Primary Podiatric Medicine",1
+AdventHealth,IL,"Psychiatry & Neurology, Child & Adolescent Psychiatry",3
+AdventHealth,IL,"Psychiatry & Neurology, Neurology",9
+AdventHealth,IL,"Psychiatry & Neurology, Neurology with Special Qualifications in Child Neurology",2
+AdventHealth,IL,"Psychiatry & Neurology, Psychiatry",5
+AdventHealth,IL,"Psychologist, Clinical",3
+AdventHealth,IL,"Radiology, Diagnostic Radiology",5
+AdventHealth,IL,"Radiology, Vascular & Interventional Radiology",13
+AdventHealth,IL,"Social Worker, Clinical",2
+AdventHealth,IL,Specialist,4
+AdventHealth,IL,Student in an Organized Health Care Education/Training Program,6
+AdventHealth,IL,Surgery,21
+AdventHealth,IL,"Surgery, Pediatric Surgery",7
+AdventHealth,IL,"Surgery, Plastic and Reconstructive Surgery",1
+AdventHealth,IL,"Surgery, Surgery of the Hand",1
+AdventHealth,IL,"Surgery, Surgical Oncology",1
+AdventHealth,IL,Thoracic Surgery (Cardiothoracic Vascular Surgery),7
+AdventHealth,IL,Unknown,24
+AdventHealth,IL,Urology,11
+AdventHealth,IN,"Psychiatry & Neurology, Neurology",3
+AdventHealth,KS,Advanced Practice Midwife,2
+AdventHealth,KS,Allergy & Immunology,4
+AdventHealth,KS,Anesthesiology,6
+AdventHealth,KS,"Anesthesiology, Pain Medicine",4
+AdventHealth,KS,Audiologist,4
+AdventHealth,KS,"Clinical Nurse Specialist, Adult Health",1
+AdventHealth,KS,"Clinical Nurse Specialist, Medical-Surgical",1
+AdventHealth,KS,Colon & Rectal Surgery,5
+AdventHealth,KS,Dentist,1
+AdventHealth,KS,"Dentist, Oral and Maxillofacial Surgery",6
+AdventHealth,KS,Dermatology,8
+AdventHealth,KS,"Dermatology, MOHS-Micrographic Surgery",1
+AdventHealth,KS,"Dietitian, Registered",1
+AdventHealth,KS,Emergency Medicine,2
+AdventHealth,KS,"Emergency Medicine, Emergency Medical Services",1
+AdventHealth,KS,"Emergency Medicine, Undersea and Hyperbaric Medicine",2
+AdventHealth,KS,Family Medicine,59
+AdventHealth,KS,"Family Medicine, Geriatric Medicine",2
+AdventHealth,KS,Hospitalist,1
+AdventHealth,KS,Internal Medicine,32
+AdventHealth,KS,"Internal Medicine, Allergy & Immunology",1
+AdventHealth,KS,"Internal Medicine, Cardiovascular Disease",8
+AdventHealth,KS,"Internal Medicine, Clinical Cardiac Electrophysiology",2
+AdventHealth,KS,"Internal Medicine, Critical Care Medicine",1
+AdventHealth,KS,"Internal Medicine, Endocrinology, Diabetes & Metabolism",3
+AdventHealth,KS,"Internal Medicine, Gastroenterology",15
+AdventHealth,KS,"Internal Medicine, Geriatric Medicine",1
+AdventHealth,KS,"Internal Medicine, Hematology & Oncology",3
+AdventHealth,KS,"Internal Medicine, Infectious Disease",6
+AdventHealth,KS,"Internal Medicine, Interventional Cardiology",6
+AdventHealth,KS,"Internal Medicine, Medical Oncology",1
+AdventHealth,KS,"Internal Medicine, Nephrology",8
+AdventHealth,KS,"Internal Medicine, Pulmonary Disease",10
+AdventHealth,KS,"Internal Medicine, Rheumatology",2
+AdventHealth,KS,"Internal Medicine, Sleep Medicine",1
+AdventHealth,KS,Neurological Surgery,5
+AdventHealth,KS,"Nurse Anesthetist, Certified Registered",1
+AdventHealth,KS,Nurse Practitioner,32
+AdventHealth,KS,"Nurse Practitioner, Acute Care",2
+AdventHealth,KS,"Nurse Practitioner, Adult Health",7
+AdventHealth,KS,"Nurse Practitioner, Family",48
+AdventHealth,KS,"Nurse Practitioner, Gerontology",2
+AdventHealth,KS,"Nurse Practitioner, Obstetrics & Gynecology",4
+AdventHealth,KS,"Nurse Practitioner, Primary Care",4
+AdventHealth,KS,"Nurse Practitioner, Women's Health",4
+AdventHealth,KS,Obstetrics & Gynecology,30
+AdventHealth,KS,"Obstetrics & Gynecology, Bariatric Medicine",1
+AdventHealth,KS,"Obstetrics & Gynecology, Gynecologic Oncology",3
+AdventHealth,KS,"Obstetrics & Gynecology, Gynecology",1
+AdventHealth,KS,"Obstetrics & Gynecology, Maternal & Fetal Medicine",2
+AdventHealth,KS,"Obstetrics & Gynecology, Obstetrics",1
+AdventHealth,KS,"Obstetrics & Gynecology, Reproductive Endocrinology",1
+AdventHealth,KS,"Obstetrics & Gynecology, Urogynecology and Reconstructive Pelvic Surgery",2
+AdventHealth,KS,Ophthalmology,21
+AdventHealth,KS,"Ophthalmology, Glaucoma Specialist",4
+AdventHealth,KS,"Ophthalmology, Ophthalmic Plastic and Reconstructive Surgery",1
+AdventHealth,KS,"Ophthalmology, Retina Specialist",1
+AdventHealth,KS,Oral & Maxillofacial Surgery,2
+AdventHealth,KS,Orthopaedic Surgery,29
+AdventHealth,KS,"Orthopaedic Surgery, Adult Reconstructive Orthopaedic Surgery",3
+AdventHealth,KS,"Orthopaedic Surgery, Foot and Ankle Surgery",2
+AdventHealth,KS,"Orthopaedic Surgery, Hand Surgery",8
+AdventHealth,KS,"Orthopaedic Surgery, Orthopaedic Surgery of the Spine",6
+AdventHealth,KS,"Orthopaedic Surgery, Orthopaedic Trauma",3
+AdventHealth,KS,"Orthopaedic Surgery, Sports Medicine",13
+AdventHealth,KS,Otolaryngology,6
+AdventHealth,KS,"Otolaryngology, Otolaryngology/Facial Plastic Surgery",2
+AdventHealth,KS,"Otolaryngology, Otology & Neurotology",2
+AdventHealth,KS,"Otolaryngology, Plastic Surgery within the Head & Neck",1
+AdventHealth,KS,"Pathology, Anatomic Pathology & Clinical Pathology",1
+AdventHealth,KS,Pediatrics,47
+AdventHealth,KS,"Pediatrics, Adolescent Medicine",3
+AdventHealth,KS,"Pediatrics, Developmental - Behavioral Pediatrics",1
+AdventHealth,KS,"Pediatrics, Neonatal-Perinatal Medicine",1
+AdventHealth,KS,Physical Medicine & Rehabilitation,3
+AdventHealth,KS,"Physical Medicine & Rehabilitation, Hospice and Palliative Medicine",1
+AdventHealth,KS,Physician Assistant,40
+AdventHealth,KS,"Physician Assistant, Medical",15
+AdventHealth,KS,"Physician Assistant, Surgical",22
+AdventHealth,KS,Plastic Surgery,7
+AdventHealth,KS,Podiatrist,4
+AdventHealth,KS,"Podiatrist, Foot & Ankle Surgery",5
+AdventHealth,KS,"Psychiatry & Neurology, Epilepsy",2
+AdventHealth,KS,"Psychiatry & Neurology, Neurology",10
+AdventHealth,KS,"Psychiatry & Neurology, Psychiatry",5
+AdventHealth,KS,Psychologist,2
+AdventHealth,KS,"Radiology, Diagnostic Radiology",14
+AdventHealth,KS,"Radiology, Vascular & Interventional Radiology",2
+AdventHealth,KS,"Registered Nurse, Medical-Surgical",1
+AdventHealth,KS,Specialist,5
+AdventHealth,KS,Student in an Organized Health Care Education/Training Program,1
+AdventHealth,KS,Surgery,12
+AdventHealth,KS,"Surgery, Plastic and Reconstructive Surgery",6
+AdventHealth,KS,"Surgery, Surgical Critical Care",1
+AdventHealth,KS,Thoracic Surgery (Cardiothoracic Vascular Surgery),2
+AdventHealth,KS,Unknown,16
+AdventHealth,KS,Urology,17
+AdventHealth,KY,Advanced Practice Midwife,1
+AdventHealth,KY,"Counselor, Mental Health",2
+AdventHealth,KY,Family Medicine,4
+AdventHealth,KY,Internal Medicine,2
+AdventHealth,KY,"Internal Medicine, Endocrinology, Diabetes & Metabolism",1
+AdventHealth,KY,"Internal Medicine, Nephrology",2
+AdventHealth,KY,Nurse Practitioner,4
+AdventHealth,KY,"Nurse Practitioner, Family",29
+AdventHealth,KY,"Nurse Practitioner, Psych/Mental Health",1
+AdventHealth,KY,Obstetrics & Gynecology,1
+AdventHealth,KY,Ophthalmology,2
+AdventHealth,KY,Orthopaedic Surgery,1
+AdventHealth,KY,Otolaryngology,1
+AdventHealth,KY,Pediatrics,2
+AdventHealth,KY,"Physician Assistant, Medical",2
+AdventHealth,KY,Psychologist,1
+AdventHealth,KY,Social Worker,1
+AdventHealth,KY,"Social Worker, Clinical",4
+AdventHealth,KY,Surgery,2
+AdventHealth,MD,"Psychiatry & Neurology, Neurology",2
+AdventHealth,MO,Clinical Neuropsychologist,1
+AdventHealth,MO,"Dentist, Oral and Maxillofacial Surgery",1
+AdventHealth,MO,Family Medicine,3
+AdventHealth,MO,"Family Medicine, Hospice and Palliative Medicine",1
+AdventHealth,MO,"Internal Medicine, Nephrology",4
+AdventHealth,MO,Nurse Practitioner,2
+AdventHealth,MO,"Nurse Practitioner, Family",5
+AdventHealth,MO,"Nurse Practitioner, Gerontology",1
+AdventHealth,MO,"Nurse Practitioner, Neonatal",15
+AdventHealth,MO,"Nurse Practitioner, Neonatal, Critical Care",6
+AdventHealth,MO,"Nurse Practitioner, Pediatrics",8
+AdventHealth,MO,"Nurse Practitioner, Primary Care",1
+AdventHealth,MO,"Obstetrics & Gynecology, Maternal & Fetal Medicine",1
+AdventHealth,MO,"Ophthalmology, Pediatric Ophthalmology and Strabismus Specialist",2
+AdventHealth,MO,Orthopaedic Surgery,1
+AdventHealth,MO,"Orthopaedic Surgery, Hand Surgery",1
+AdventHealth,MO,Otolaryngology,2
+AdventHealth,MO,"Otolaryngology, Facial Plastic Surgery",1
+AdventHealth,MO,"Pathology, Anatomic Pathology & Clinical Pathology",1
+AdventHealth,MO,Pediatrics,16
+AdventHealth,MO,"Pediatrics, Neonatal-Perinatal Medicine",13
+AdventHealth,MO,"Pediatrics, Pediatric Cardiology",12
+AdventHealth,MO,Physical Medicine & Rehabilitation,1
+AdventHealth,MO,Physician Assistant,9
+AdventHealth,MO,"Physician Assistant, Medical",1
+AdventHealth,MO,"Physician Assistant, Surgical",2
+AdventHealth,MO,"Podiatrist, Foot & Ankle Surgery",1
+AdventHealth,MO,"Psychiatry & Neurology, Neurology",1
+AdventHealth,MO,Unknown,3
+AdventHealth,MO,Urology,3
+AdventHealth,NC,Advanced Practice Midwife,4
+AdventHealth,NC,Audiologist,3
+AdventHealth,NC,Colon & Rectal Surgery,1
+AdventHealth,NC,"Counselor, Mental Health",1
+AdventHealth,NC,Dermatology,1
+AdventHealth,NC,Emergency Medicine,1
+AdventHealth,NC,Family Medicine,23
+AdventHealth,NC,"Family Medicine, Sports Medicine",1
+AdventHealth,NC,Internal Medicine,13
+AdventHealth,NC,"Internal Medicine, Cardiovascular Disease",4
+AdventHealth,NC,"Internal Medicine, Critical Care Medicine",1
+AdventHealth,NC,"Internal Medicine, Endocrinology, Diabetes & Metabolism",2
+AdventHealth,NC,"Internal Medicine, Gastroenterology",3
+AdventHealth,NC,"Internal Medicine, Hematology & Oncology",4
+AdventHealth,NC,"Internal Medicine, Infectious Disease",2
+AdventHealth,NC,"Internal Medicine, Interventional Cardiology",2
+AdventHealth,NC,"Internal Medicine, Medical Oncology",1
+AdventHealth,NC,"Internal Medicine, Nephrology",1
+AdventHealth,NC,"Internal Medicine, Pulmonary Disease",2
+AdventHealth,NC,"Internal Medicine, Rheumatology",2
+AdventHealth,NC,Nurse Practitioner,7
+AdventHealth,NC,"Nurse Practitioner, Adult Health",1
+AdventHealth,NC,"Nurse Practitioner, Family",17
+AdventHealth,NC,"Nurse Practitioner, Gerontology",2
+AdventHealth,NC,"Nurse Practitioner, Pediatrics",1
+AdventHealth,NC,"Nurse Practitioner, Primary Care",1
+AdventHealth,NC,"Nurse Practitioner, Psych/Mental Health",4
+AdventHealth,NC,Obstetrics & Gynecology,8
+AdventHealth,NC,"Obstetrics & Gynecology, Gynecology",1
+AdventHealth,NC,"Obstetrics & Gynecology, Obstetrics",1
+AdventHealth,NC,"Ophthalmology, Ophthalmic Plastic and Reconstructive Surgery",1
+AdventHealth,NC,Orthopaedic Surgery,16
+AdventHealth,NC,"Orthopaedic Surgery, Foot and Ankle Surgery",1
+AdventHealth,NC,"Orthopaedic Surgery, Hand Surgery",2
+AdventHealth,NC,"Orthopaedic Surgery, Orthopaedic Surgery of the Spine",1
+AdventHealth,NC,"Orthopaedic Surgery, Sports Medicine",2
+AdventHealth,NC,Otolaryngology,6
+AdventHealth,NC,Pediatrics,3
+AdventHealth,NC,"Pharmacist, Pharmacist Clinician (PhC)/ Clinical Pharmacy Specialist",1
+AdventHealth,NC,Physical Medicine & Rehabilitation,4
+AdventHealth,NC,"Physical Medicine & Rehabilitation, Pain Medicine",1
+AdventHealth,NC,Physician Assistant,37
+AdventHealth,NC,"Physician Assistant, Surgical",2
+AdventHealth,NC,Podiatrist,2
+AdventHealth,NC,"Podiatrist, Foot & Ankle Surgery",3
+AdventHealth,NC,"Podiatrist, Primary Podiatric Medicine",2
+AdventHealth,NC,"Psychiatry & Neurology, Neurology",3
+AdventHealth,NC,"Psychiatry & Neurology, Psychiatry",6
+AdventHealth,NC,Psychologist,3
+AdventHealth,NC,"Social Worker, Clinical",5
+AdventHealth,NC,Surgery,7
+AdventHealth,NC,"Surgery, Surgical Oncology",1
+AdventHealth,NC,Unknown,5
+AdventHealth,NC,Urology,10
+AdventHealth,NE,"Radiology, Diagnostic Radiology",1
+AdventHealth,OK,Pediatrics,1
+AdventHealth,TN,"Psychiatry & Neurology, Neurology",1
+AdventHealth,TX,Advanced Practice Midwife,2
+AdventHealth,TX,"Anesthesiology, Pain Medicine",1
+AdventHealth,TX,Audiologist,1
+AdventHealth,TX,"Clinical Nurse Specialist, Adult Health",1
+AdventHealth,TX,Colon & Rectal Surgery,1
+AdventHealth,TX,Counselor,1
+AdventHealth,TX,"Counselor, Professional",1
+AdventHealth,TX,"Dentist, Oral and Maxillofacial Surgery",1
+AdventHealth,TX,Dermatology,3
+AdventHealth,TX,Family Medicine,39
+AdventHealth,TX,"Family Medicine, Sports Medicine",1
+AdventHealth,TX,Hospitalist,1
+AdventHealth,TX,Internal Medicine,20
+AdventHealth,TX,"Internal Medicine, Adolescent Medicine",1
+AdventHealth,TX,"Internal Medicine, Cardiovascular Disease",13
+AdventHealth,TX,"Internal Medicine, Clinical Cardiac Electrophysiology",3
+AdventHealth,TX,"Internal Medicine, Critical Care Medicine",2
+AdventHealth,TX,"Internal Medicine, Endocrinology, Diabetes & Metabolism",2
+AdventHealth,TX,"Internal Medicine, Gastroenterology",14
+AdventHealth,TX,"Internal Medicine, Hematology",2
+AdventHealth,TX,"Internal Medicine, Hematology & Oncology",7
+AdventHealth,TX,"Internal Medicine, Infectious Disease",5
+AdventHealth,TX,"Internal Medicine, Interventional Cardiology",16
+AdventHealth,TX,"Internal Medicine, Medical Oncology",3
+AdventHealth,TX,"Internal Medicine, Nephrology",22
+AdventHealth,TX,"Internal Medicine, Pulmonary Disease",7
+AdventHealth,TX,"Internal Medicine, Rheumatology",2
+AdventHealth,TX,Midwife,1
+AdventHealth,TX,Neurological Surgery,1
+AdventHealth,TX,"Nurse Anesthetist, Certified Registered",1
+AdventHealth,TX,Nurse Practitioner,8
+AdventHealth,TX,"Nurse Practitioner, Acute Care",5
+AdventHealth,TX,"Nurse Practitioner, Family",38
+AdventHealth,TX,"Nurse Practitioner, Obstetrics & Gynecology",1
+AdventHealth,TX,"Nurse Practitioner, Pediatrics",1
+AdventHealth,TX,"Nurse Practitioner, Primary Care",2
+AdventHealth,TX,"Nurse Practitioner, Psych/Mental Health",1
+AdventHealth,TX,"Nurse Practitioner, Women's Health",1
+AdventHealth,TX,Obstetrics & Gynecology,15
+AdventHealth,TX,"Obstetrics & Gynecology, Gynecology",1
+AdventHealth,TX,"Obstetrics & Gynecology, Obstetrics",1
+AdventHealth,TX,Ophthalmology,7
+AdventHealth,TX,Orthopaedic Surgery,9
+AdventHealth,TX,"Orthopaedic Surgery, Adult Reconstructive Orthopaedic Surgery",1
+AdventHealth,TX,"Orthopaedic Surgery, Hand Surgery",1
+AdventHealth,TX,"Orthopaedic Surgery, Orthopaedic Surgery of the Spine",3
+AdventHealth,TX,"Orthopaedic Surgery, Sports Medicine",1
+AdventHealth,TX,Otolaryngology,3
+AdventHealth,TX,"Pain Medicine, Interventional Pain Medicine",2
+AdventHealth,TX,"Pathology, Anatomic Pathology",1
+AdventHealth,TX,"Pathology, Anatomic Pathology & Clinical Pathology",1
+AdventHealth,TX,Pediatrics,12
+AdventHealth,TX,"Pediatrics, Neonatal-Perinatal Medicine",1
+AdventHealth,TX,"Pediatrics, Pediatric Cardiology",6
+AdventHealth,TX,"Pediatrics, Pediatric Gastroenterology",1
+AdventHealth,TX,Physical Medicine & Rehabilitation,1
+AdventHealth,TX,Physician Assistant,7
+AdventHealth,TX,"Physician Assistant, Medical",1
+AdventHealth,TX,Plastic Surgery,1
+AdventHealth,TX,Podiatrist,2
+AdventHealth,TX,"Podiatrist, Foot & Ankle Surgery",7
+AdventHealth,TX,"Psychiatry & Neurology, Child & Adolescent Psychiatry",1
+AdventHealth,TX,"Psychiatry & Neurology, Neurology",2
+AdventHealth,TX,"Psychiatry & Neurology, Neuromuscular Medicine",1
+AdventHealth,TX,"Psychiatry & Neurology, Psychiatry",5
+AdventHealth,TX,"Psychologist, Clinical Child & Adolescent",1
+AdventHealth,TX,"Radiology, Vascular & Interventional Radiology",2
+AdventHealth,TX,"Social Worker, Clinical",1
+AdventHealth,TX,Surgery,12
+AdventHealth,TX,"Surgery, Plastic and Reconstructive Surgery",1
+AdventHealth,TX,"Surgery, Surgery of the Hand",2
+AdventHealth,TX,"Surgery, Surgical Critical Care",1
+AdventHealth,TX,"Surgery, Surgical Oncology",1
+AdventHealth,TX,Thoracic Surgery (Cardiothoracic Vascular Surgery),3
+AdventHealth,TX,Unknown,8
+AdventHealth,TX,Urology,10
+AdventHealth,VA,Internal Medicine,1
+AdventHealth,VA,"Psychiatry & Neurology, Neurology",3
+AdventHealth,VA,"Psychiatry & Neurology, Vascular Neurology",1
+AdventHealth,VA,Unknown,1
+AdventHealth,WI,Family Medicine,1
+AdventHealth,WI,Internal Medicine,1
+AdventHealth,WI,"Internal Medicine, Cardiovascular Disease",1
+AdventHealth,WI,"Internal Medicine, Gastroenterology",1
+AdventHealth,WI,Nurse Practitioner,1
+AdventHealth,WI,"Nurse Practitioner, Family",1
+AdventHealth,WI,Obstetrics & Gynecology,2
+AdventHealth,WI,Ophthalmology,1
+AdventHealth,WI,Orthopaedic Surgery,1
+AdventHealth,WI,Otolaryngology,1
+AdventHealth,WI,"Pathology, Anatomic Pathology & Clinical Pathology",1
+AdventHealth,WI,"Radiology, Diagnostic Radiology",1
+AdventHealth,WI,Surgery,1
+AdventHealth,WI,Urology,1
+Arizona,AZ,Acupuncturist,3
+Arizona,AZ,Addiction Psychiatry Physician,1
+Arizona,AZ,Adolescent Medicine (Family Medicine) Physician,5
+Arizona,AZ,Adult Health Nurse Practitioner,46
+Arizona,AZ,Advanced Heart Failure and Transplant Cardiology Physician,3
+Arizona,AZ,Allergy & Immunology Physician,70
+Arizona,AZ,Allergy Physician,3
+Arizona,AZ,Anatomic Pathology & Clinical Pathology Physician,91
+Arizona,AZ,Anatomic Pathology Physician,15
+Arizona,AZ,Anesthesiology Physician,1249
+Arizona,AZ,Athletic Trainer,6
+Arizona,AZ,Audiologist,131
+Arizona,AZ,Blood Banking & Transfusion Medicine Physician,3
+Arizona,AZ,Brain Injury Medicine (Physical Medicine & Rehabilitation) Physician,3
+Arizona,AZ,Cardiovascular Disease Physician,486
+Arizona,AZ,Certified Registered Nurse Anesthetist,836
+Arizona,AZ,Child & Adolescent Psychiatry Physician,14
+Arizona,AZ,Child Abuse Pediatrics Physician,5
+Arizona,AZ,Chiropractor,114
+Arizona,AZ,Clinical Cardiac Electrophysiology Physician,49
+Arizona,AZ,Clinical Child & Adolescent Psychologist,1
+Arizona,AZ,Clinical Genetics (M.D.) Physician,5
+Arizona,AZ,Clinical Neurophysiology Physician,20
+Arizona,AZ,Clinical Neuropsychologist,20
+Arizona,AZ,Clinical Pathology Physician,9
+Arizona,AZ,Clinical Social Worker,5
+Arizona,AZ,Colon & Rectal Surgery Physician,46
+Arizona,AZ,Counselor,2590
+Arizona,AZ,Cytopathology Physician,5
+Arizona,AZ,Dentist,10
+Arizona,AZ,Dermatology Physician,469
+Arizona,AZ,Dermatopathology Physician,18
+Arizona,AZ,Developmental - Behavioral Pediatrics Physician,7
+Arizona,AZ,Diagnostic Radiology Physician,1087
+Arizona,AZ,Emergency Medicine Physician,886
+Arizona,AZ,"Endocrinology, Diabetes & Metabolism Physician",132
+Arizona,AZ,Family Medicine Physician,2696
+Arizona,AZ,Family Nurse Practitioner,2324
+Arizona,AZ,Gastroenterology Physician,341
+Arizona,AZ,General Practice Physician,100
+Arizona,AZ,Geriatric Medicine (Family Medicine) Physician,51
+Arizona,AZ,Gerontology Nurse Practitioner,86
+Arizona,AZ,Gynecologic Oncology Physician,25
+Arizona,AZ,Gynecology Physician,38
+Arizona,AZ,Hematology & Oncology Physician,35
+Arizona,AZ,Hepatology Physician,11
+Arizona,AZ,Infectious Disease Physician,123
+Arizona,AZ,Internal Medicine Physician,2949
+Arizona,AZ,Interventional Cardiology Physician,181
+Arizona,AZ,MOHS-Micrographic Surgery Physician,5
+Arizona,AZ,Maternal & Fetal Medicine Physician,50
+Arizona,AZ,Medical Oncology Physician,271
+Arizona,AZ,Medical Toxicology (Preventive Medicine) Physician,13
+Arizona,AZ,Midwife,162
+Arizona,AZ,Naturopath,16
+Arizona,AZ,Neonatal Nurse Practitioner,94
+Arizona,AZ,Neonatal-Perinatal Medicine Physician,113
+Arizona,AZ,Nephrology Physician,210
+Arizona,AZ,Neurodevelopmental Disabilities Physician,1
+Arizona,AZ,Neurological Surgery Physician,163
+Arizona,AZ,Neurology Physician,528
+Arizona,AZ,Neuromusculoskeletal Medicine & OMM Physician,6
+Arizona,AZ,Neuroradiology Physician,55
+Arizona,AZ,Nuclear Cardiology Physician,2
+Arizona,AZ,Nuclear Medicine Physician,17
+Arizona,AZ,Nuclear Radiology Physician,1
+Arizona,AZ,Nurse Practitioner,1334
+Arizona,AZ,Nutritionist,10
+Arizona,AZ,Obstetrics & Gynecology Physician,791
+Arizona,AZ,Obstetrics Physician,3
+Arizona,AZ,Occupational Medicine Physician,1
+Arizona,AZ,Occupational Therapist,99
+Arizona,AZ,Ophthalmology Physician,313
+Arizona,AZ,Optometrist,544
+Arizona,AZ,Oral & Maxillofacial Surgery (D.M.D.),18
+Arizona,AZ,Orthodontics and Dentofacial Orthopedics Dentistry,1
+Arizona,AZ,Orthopaedic Foot and Ankle Surgery Physician,7
+Arizona,AZ,Orthopaedic Surgery Physician,724
+Arizona,AZ,Orthopaedic Trauma Physician,22
+Arizona,AZ,Otolaryngology Physician,188
+Arizona,AZ,Otology & Neurotology Physician,3
+Arizona,AZ,Pain Medicine Physician,217
+Arizona,AZ,Pediatric Allergy/Immunology Physician,6
+Arizona,AZ,Pediatric Cardiology Physician,53
+Arizona,AZ,Pediatric Critical Care Medicine Physician,72
+Arizona,AZ,Pediatric Dentistry,2
+Arizona,AZ,Pediatric Dermatology Physician,4
+Arizona,AZ,Pediatric Emergency Medicine (Emergency Medicine) Physician,55
+Arizona,AZ,Pediatric Endocrinology Physician,29
+Arizona,AZ,Pediatric Gastroenterology Physician,45
+Arizona,AZ,Pediatric Hematology & Oncology Physician,52
+Arizona,AZ,Pediatric Infectious Diseases Physician,15
+Arizona,AZ,Pediatric Nephrology Physician,14
+Arizona,AZ,Pediatric Nurse Practitioner,210
+Arizona,AZ,Pediatric Otolaryngology Physician,19
+Arizona,AZ,Pediatric Pathology Physician,3
+Arizona,AZ,Pediatric Pulmonology Physician,20
+Arizona,AZ,Pediatric Radiology Physician,25
+Arizona,AZ,Pediatric Rehabilitation Medicine Physician,5
+Arizona,AZ,Pediatric Rheumatology Physician,5
+Arizona,AZ,Pediatric Sports Medicine Physician,9
+Arizona,AZ,Pediatric Surgery Physician,46
+Arizona,AZ,Pediatric Urology Physician,13
+Arizona,AZ,Pediatrics Physician,1202
+Arizona,AZ,Physical Medicine & Rehabilitation Physician,176
+Arizona,AZ,Physical Therapist,448
+Arizona,AZ,Physician Assistant,2089
+Arizona,AZ,Plastic Surgery Physician,110
+Arizona,AZ,Plastic Surgery Within the Head and Neck (Plastic Surgery) Physician,2
+Arizona,AZ,Podiatrist,386
+Arizona,AZ,Psychiatry Physician,638
+Arizona,AZ,Psychologist,320
+Arizona,AZ,Public Health & General Preventive Medicine Physician,6
+Arizona,AZ,Pulmonary Disease Physician,256
+Arizona,AZ,Radiation Oncology Physician,133
+Arizona,AZ,Registered Dietitian,366
+Arizona,AZ,Registered Nurse,14
+Arizona,AZ,Reproductive Endocrinology Physician,17
+Arizona,AZ,Rheumatology Physician,99
+Arizona,AZ,Social Worker,1078
+Arizona,AZ,Speech-Language Pathologist,98
+Arizona,AZ,Spinal Cord Injury Medicine Physician,4
+Arizona,AZ,Sports Medicine (Orthopaedic Surgery) Physician,14
+Arizona,AZ,Surgery Physician,619
+Arizona,AZ,Surgery of the Hand (Surgery) Physician,39
+Arizona,AZ,Surgical Assistant,20
+Arizona,AZ,Surgical Critical Care Physician,50
+Arizona,AZ,Surgical Oncology Physician,16
+Arizona,AZ,Thoracic Surgery (Cardiothoracic Vascular Surgery) Physician,113
+Arizona,AZ,Transplant Hepatology Physician,11
+Arizona,AZ,Undersea and Hyperbaric Medicine (Preventive Medicine) Physician,3
+Arizona,AZ,Unknown,1619
+Arizona,AZ,Urogynecology and Reconstructive Pelvic Surgery (Obstetrics & Gynecology) Physician,13
+Arizona,AZ,Urology Physician,260
+Arizona,AZ,Vascular & Interventional Radiology Physician,90
+Arizona,AZ,Vascular Neurology Physician,15
+Arizona,AZ,Vascular Surgery Physician,105
+Arizona,AZ,Women's Health Nurse Practitioner,70
+Arizona,AZ,Wound Care Registered Nurse,3
+Rhode Island,RI,Acupuncturist,2
+Rhode Island,RI,Adolescent Medicine (Family Medicine) Physician,3
+Rhode Island,RI,Adult Health Nurse Practitioner,34
+Rhode Island,RI,Advanced Heart Failure and Transplant Cardiology Physician,1
+Rhode Island,RI,Allergy & Immunology Physician,11
+Rhode Island,RI,Allergy Physician,1
+Rhode Island,RI,Anatomic Pathology & Clinical Pathology Physician,49
+Rhode Island,RI,Anatomic Pathology Physician,12
+Rhode Island,RI,Anesthesiology Physician,203
+Rhode Island,RI,Audiologist,10
+Rhode Island,RI,Blood Banking & Transfusion Medicine Physician,1
+Rhode Island,RI,Brain Injury Medicine (Physical Medicine & Rehabilitation) Physician,1
+Rhode Island,RI,Cardiovascular Disease Physician,130
+Rhode Island,RI,Certified Registered Nurse Anesthetist,182
+Rhode Island,RI,Child & Adolescent Psychiatry Physician,2
+Rhode Island,RI,Chiropractor,5
+Rhode Island,RI,Clinical Biochemical Genetics Physician,1
+Rhode Island,RI,Clinical Cardiac Electrophysiology Physician,7
+Rhode Island,RI,Clinical Neurophysiology Physician,3
+Rhode Island,RI,Clinical Neuropsychologist,5
+Rhode Island,RI,Clinical Pathology Physician,2
+Rhode Island,RI,Colon & Rectal Surgery Physician,7
+Rhode Island,RI,Counselor,482
+Rhode Island,RI,Cytopathology Physician,2
+Rhode Island,RI,Dermatology Physician,92
+Rhode Island,RI,Dermatopathology Physician,6
+Rhode Island,RI,Developmental - Behavioral Pediatrics Physician,2
+Rhode Island,RI,Diagnostic Radiology Physician,156
+Rhode Island,RI,Emergency Medicine Physician,289
+Rhode Island,RI,"Endocrinology, Diabetes & Metabolism Physician",19
+Rhode Island,RI,Family Medicine Physician,559
+Rhode Island,RI,Family Nurse Practitioner,364
+Rhode Island,RI,Gastroenterology Physician,84
+Rhode Island,RI,General Practice Physician,44
+Rhode Island,RI,Geriatric Medicine (Family Medicine) Physician,25
+Rhode Island,RI,Gerontology Nurse Practitioner,19
+Rhode Island,RI,Gynecologic Oncology Physician,6
+Rhode Island,RI,Gynecology Physician,10
+Rhode Island,RI,Hematology & Oncology Physician,2
+Rhode Island,RI,Infectious Disease Physician,41
+Rhode Island,RI,Internal Medicine Physician,1077
+Rhode Island,RI,Interventional Cardiology Physician,18
+Rhode Island,RI,MOHS-Micrographic Surgery Physician,2
+Rhode Island,RI,Maternal & Fetal Medicine Physician,12
+Rhode Island,RI,Medical Oncology Physician,56
+Rhode Island,RI,Midwife,78
+Rhode Island,RI,Neonatal Nurse Practitioner,9
+Rhode Island,RI,Neonatal-Perinatal Medicine Physician,14
+Rhode Island,RI,Nephrology Physician,24
+Rhode Island,RI,Neurological Surgery Physician,54
+Rhode Island,RI,Neurology Physician,121
+Rhode Island,RI,Neuromusculoskeletal Medicine & OMM Physician,2
+Rhode Island,RI,Neuropathology Physician,1
+Rhode Island,RI,Nuclear Medicine Physician,1
+Rhode Island,RI,Nuclear Radiology Physician,2
+Rhode Island,RI,Nurse Practitioner,332
+Rhode Island,RI,Nutritionist,20
+Rhode Island,RI,Obstetrics & Gynecology Physician,221
+Rhode Island,RI,Obstetrics Physician,3
+Rhode Island,RI,Occupational Medicine Physician,3
+Rhode Island,RI,Occupational Therapist,45
+Rhode Island,RI,Ophthalmology Physician,77
+Rhode Island,RI,Optometrist,169
+Rhode Island,RI,Oral & Maxillofacial Surgery (D.M.D.),3
+Rhode Island,RI,Orthopaedic Foot and Ankle Surgery Physician,1
+Rhode Island,RI,Orthopaedic Surgery Physician,210
+Rhode Island,RI,Orthopaedic Trauma Physician,1
+Rhode Island,RI,Otolaryngology Physician,40
+Rhode Island,RI,Pain Medicine Physician,17
+Rhode Island,RI,Pediatric Allergy/Immunology Physician,1
+Rhode Island,RI,Pediatric Cardiology Physician,7
+Rhode Island,RI,Pediatric Critical Care Medicine Physician,5
+Rhode Island,RI,Pediatric Emergency Medicine (Emergency Medicine) Physician,44
+Rhode Island,RI,Pediatric Endocrinology Physician,9
+Rhode Island,RI,Pediatric Gastroenterology Physician,7
+Rhode Island,RI,Pediatric Hematology & Oncology Physician,7
+Rhode Island,RI,Pediatric Infectious Diseases Physician,6
+Rhode Island,RI,Pediatric Nephrology Physician,4
+Rhode Island,RI,Pediatric Nurse Practitioner,13
+Rhode Island,RI,Pediatric Pathology Physician,2
+Rhode Island,RI,Pediatric Pulmonology Physician,3
+Rhode Island,RI,Pediatric Rheumatology Physician,1
+Rhode Island,RI,Pediatric Surgery Physician,7
+Rhode Island,RI,Pediatric Urology Physician,1
+Rhode Island,RI,Pediatrics Physician,361
+Rhode Island,RI,Physical Medicine & Rehabilitation Physician,31
+Rhode Island,RI,Physical Therapist,89
+Rhode Island,RI,Physician Assistant,419
+Rhode Island,RI,Plastic Surgery Physician,27
+Rhode Island,RI,Podiatrist,65
+Rhode Island,RI,Psychiatry Physician,277
+Rhode Island,RI,Psychologist,301
+Rhode Island,RI,Public Health & General Preventive Medicine Physician,1
+Rhode Island,RI,Pulmonary Disease Physician,52
+Rhode Island,RI,Radiation Oncology Physician,41
+Rhode Island,RI,Registered Dietitian,104
+Rhode Island,RI,Registered Nurse,4
+Rhode Island,RI,Reproductive Endocrinology Physician,3
+Rhode Island,RI,Rheumatology Physician,21
+Rhode Island,RI,Social Worker,488
+Rhode Island,RI,Speech-Language Pathologist,27
+Rhode Island,RI,Sports Medicine (Orthopaedic Surgery) Physician,1
+Rhode Island,RI,Surgery Physician,138
+Rhode Island,RI,Surgery of the Hand (Surgery) Physician,11
+Rhode Island,RI,Surgical Assistant,1
+Rhode Island,RI,Surgical Critical Care Physician,4
+Rhode Island,RI,Thoracic Surgery (Cardiothoracic Vascular Surgery) Physician,25
+Rhode Island,RI,Undersea and Hyperbaric Medicine (Preventive Medicine) Physician,1
+Rhode Island,RI,Unknown,235
+Rhode Island,RI,Urogynecology and Reconstructive Pelvic Surgery (Obstetrics & Gynecology) Physician,8
+Rhode Island,RI,Urology Physician,57
+Rhode Island,RI,Vascular & Interventional Radiology Physician,10
+Rhode Island,RI,Vascular Neurology Physician,2
+Rhode Island,RI,Vascular Surgery Physician,18
+Rhode Island,RI,Women's Health Nurse Practitioner,8

@@ -1,0 +1,19 @@
+dataset,state,providers,n_physician,n_app,n_other,n_type_unknown,n_high,n_medium,n_low,n_confidence_unknown,n_address,n_zip,n_city,n_none,n_type_inferred,map_points
+AdventHealth,CO,1484,1084,400,0,0,1340,64,80,0,1403,81,0,0,0,259
+AdventHealth,FL,5927,4583,1344,0,0,5358,411,158,0,5582,344,1,0,0,1673
+AdventHealth,GA,189,115,74,0,0,167,16,6,0,167,22,0,0,0,28
+AdventHealth,IL,1022,937,85,0,0,960,40,22,0,938,84,0,0,0,321
+AdventHealth,IN,3,3,0,0,0,3,0,0,0,3,0,0,0,0,1
+AdventHealth,KS,711,535,176,0,0,658,28,25,0,695,16,0,0,0,125
+AdventHealth,KY,63,17,46,0,0,53,2,8,0,56,6,1,0,0,10
+AdventHealth,MD,2,2,0,0,0,1,1,0,0,2,0,0,0,0,1
+AdventHealth,MO,119,72,47,0,0,109,5,5,0,116,3,0,0,0,25
+AdventHealth,NC,239,158,81,0,0,209,7,23,0,214,25,0,0,0,51
+AdventHealth,NE,1,1,0,0,0,1,0,0,0,1,0,0,0,0,1
+AdventHealth,OK,1,1,0,0,0,1,0,0,0,0,1,0,0,0,1
+AdventHealth,TN,1,1,0,0,0,1,0,0,0,1,0,0,0,0,1
+AdventHealth,TX,368,295,73,0,0,346,14,8,0,320,48,0,0,0,119
+AdventHealth,VA,6,6,0,0,0,6,0,0,0,6,0,0,0,0,2
+AdventHealth,WI,15,13,2,0,0,15,0,0,0,14,1,0,0,0,12
+Arizona,AZ,34589,19416,7089,6465,1619,0,0,0,34589,31016,3573,0,0,32970,3644
+Rhode Island,RI,8434,4921,1380,1898,235,0,0,0,8434,7832,602,0,0,8199,664
