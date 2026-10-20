@@ -245,6 +245,10 @@ def cmd_export_organizations(config: Config, args: argparse.Namespace) -> None:
     db.close()
 
 
+def _print_progress(done: int, total: int) -> None:
+    print(f"  geocoded {done:,} of {total:,} new addresses", file=sys.stderr, flush=True)
+
+
 def cmd_build_map_data(config: Config, args: argparse.Namespace) -> None:
     from .geocode import census_client, geocode_addresses
     from .map_data import build_snapshot, state_codes, write_snapshot
@@ -270,7 +274,9 @@ def cmd_build_map_data(config: Config, args: argparse.Namespace) -> None:
     try:
         with census_client(config.politeness.user_agent) as client:
             snapshot = build_snapshot(
-                inputs, lambda addrs: geocode_addresses(addrs, cache_path, client), done_states
+                inputs,
+                lambda addrs: geocode_addresses(addrs, cache_path, client, _print_progress),
+                done_states,
             )
     except ValueError as err:
         print(f"\n{err}\n", file=sys.stderr)

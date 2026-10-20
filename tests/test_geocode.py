@@ -193,6 +193,7 @@ class TestGeocodeAddresses:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setattr(geocode, "CHUNK_SIZE", 2)
+        monkeypatch.setattr(geocode, "ATTEMPTS", 1)
         cache = tmp_path / "geocode.csv"
         addrs = [Address(f"{n} Main St", "Providence", "RI", "02904") for n in range(1, 6)]
         requests: list[httpx.Request] = []
@@ -215,3 +216,68 @@ class TestGeocodeAddresses:
         assert len(resumed) == 2
         assert len(out) == 5
         assert all(r.precision == "address" for r in out.values())
+
+
+class TestRetries:
+    @pytest.fixture(autouse=True)
+    def _no_waiting(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(geocode, "RETRY_DELAY_SECONDS", 0)
+
+    def _addr(self) -> list[Address]:
+        return [Address("1 Main St", "Providence", "RI", "02904")]
+
+    def test_a_timeout_is_retried_and_then_succeeds(self, tmp_path: Path):
+        requests: list[httpx.Request] = []
+        good = _batch_handler(requests)
+
+        def slow_once(request: httpx.Request) -> httpx.Response:
+            if len(requests) == 0:
+                requests.append(request)
+                raise httpx.ReadTimeout("slow", request=request)
+            return good(request)
+
+        with _client(slow_once) as client:
+            out = geocode_addresses(self._addr(), tmp_path / "c.csv", client)
+        assert len(requests) == 2
+        assert next(iter(out.values())).precision == "address"
+
+    def test_a_server_error_is_retried_but_a_client_error_is_not(self, tmp_path: Path):
+        calls: list[int] = []
+
+        def status(code: int):
+            def handler(request: httpx.Request) -> httpx.Response:
+                calls.append(code)
+                return httpx.Response(code)
+
+            return handler
+
+        with _client(status(503)) as client, pytest.raises(httpx.HTTPStatusError):
+            geocode_addresses(self._addr(), tmp_path / "a.csv", client)
+        assert len(calls) == geocode.ATTEMPTS
+
+        calls.clear()
+        with _client(status(400)) as client, pytest.raises(httpx.HTTPStatusError):
+            geocode_addresses(self._addr(), tmp_path / "b.csv", client)
+        assert len(calls) == 1
+
+    def test_it_gives_up_after_the_last_attempt(self, tmp_path: Path):
+        calls: list[int] = []
+
+        def always_slow(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            raise httpx.ReadTimeout("slow", request=request)
+
+        with _client(always_slow) as client, pytest.raises(httpx.ReadTimeout):
+            geocode_addresses(self._addr(), tmp_path / "c.csv", client)
+        assert len(calls) == geocode.ATTEMPTS
+
+
+def test_progress_is_reported_after_each_saved_chunk(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(geocode, "CHUNK_SIZE", 2)
+    addrs = [Address(f"{n} Main St", "Providence", "RI", "02904") for n in range(1, 6)]
+    seen: list[tuple[int, int]] = []
+    with _client(_batch_handler([])) as client:
+        geocode_addresses(
+            addrs, tmp_path / "c.csv", client, lambda done, total: seen.append((done, total))
+        )
+    assert seen == [(2, 5), (4, 5), (5, 5)]

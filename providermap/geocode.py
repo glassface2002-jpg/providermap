@@ -24,7 +24,8 @@ from __future__ import annotations
 import csv
 import io
 import re
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
@@ -37,7 +38,12 @@ from .parser_utils import normalize_address_key
 CENSUS_BATCH_URL = "https://geocoding.geo.census.gov/geocoder/geographies/addressbatch"
 BENCHMARK = "Public_AR_Current"
 VINTAGE = "Current_Current"
-CHUNK_SIZE = 10_000  # the Census batch endpoint's documented per-request maximum
+# The endpoint accepts up to 10,000 addresses per request, but a request that size can run past
+# the client timeout when the service is slow, losing the whole batch. Smaller requests are saved
+# to the cache one at a time, so a failure costs a few minutes of work instead of a lot.
+CHUNK_SIZE = 2_500
+ATTEMPTS = 3  # tries per request when the service times out or errors
+RETRY_DELAY_SECONDS = 20.0  # waits this long times the attempt number between tries
 
 PRECISION_ADDRESS = "address"
 PRECISION_ZIP = "zip"
@@ -225,15 +231,36 @@ def _census_batch(client: httpx.Client, rows: list[tuple[str, Address]]) -> dict
     return parse_batch_response(resp.text, ids)
 
 
+def _census_batch_with_retry(
+    client: httpx.Client, rows: list[tuple[str, Address]]
+) -> dict[str, GeoResult]:
+    """:func:`_census_batch`, tried up to :data:`ATTEMPTS` times on a timeout or server error."""
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            return _census_batch(client, rows)
+        except httpx.HTTPStatusError as err:
+            if err.response.status_code < 500 or attempt == ATTEMPTS:
+                raise
+        except httpx.TransportError:  # includes timeouts
+            if attempt == ATTEMPTS:
+                raise
+        time.sleep(RETRY_DELAY_SECONDS * attempt)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def geocode_addresses(
-    addresses: Iterable[Address], cache_path: Path, client: httpx.Client
+    addresses: Iterable[Address],
+    cache_path: Path,
+    client: httpx.Client,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, GeoResult]:
     """Geocode ``addresses``; returns ``{address_key: GeoResult}``.
 
     Addresses without a usable key (no street or ZIP) are absent from the
     result; callers treat a missing key as unmapped. Raises ``httpx.HTTPError``
     if the Census service fails - answers from earlier chunks are already
-    cached, so rerunning resumes rather than restarts.
+    cached, so rerunning resumes rather than restarts. ``on_progress(done, total)`` is
+    called after each saved chunk of the addresses that were not cached already.
     """
     unique: dict[str, Address] = {}
     for addr in addresses:
@@ -244,8 +271,10 @@ def geocode_addresses(
     cache = _load_cache(cache_path)
     pending = [(key, addr) for key, addr in unique.items() if key not in cache]
     for start in range(0, len(pending), CHUNK_SIZE):
-        cache.update(_census_batch(client, pending[start : start + CHUNK_SIZE]))
+        cache.update(_census_batch_with_retry(client, pending[start : start + CHUNK_SIZE]))
         _save_cache(cache_path, cache)
+        if on_progress:
+            on_progress(min(start + CHUNK_SIZE, len(pending)), len(pending))
 
     results: dict[str, GeoResult] = {}
     for key, addr in unique.items():

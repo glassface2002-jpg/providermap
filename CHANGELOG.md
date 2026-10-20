@@ -9,6 +9,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **The Census geocoder is more forgiving.** Requests are now 2,500 addresses instead of
+  10,000, so a slow service no longer times out a whole batch (each saved chunk is kept in the
+  cache), a timeout or server error is retried up to three times, and `build-map-data`
+  prints "geocoded N of M new addresses" after each chunk.
 - **The dashboard now publishes counts only.** `providermap build-map-data` no longer
   writes provider rows. It writes `locations.parquet` (one row per map point with
   provider counts by type and confidence, top specialties, and a site name and street
