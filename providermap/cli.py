@@ -251,7 +251,7 @@ def _print_progress(done: int, total: int) -> None:
 
 def cmd_build_map_data(config: Config, args: argparse.Namespace) -> None:
     from .geocode import census_client, geocode_addresses
-    from .map_data import build_snapshot, state_codes, write_snapshot
+    from .map_data import build_snapshot, state_codes, write_people, write_snapshot
 
     inputs: dict[str, Path] = {}
     for spec in args.input:
@@ -270,6 +270,15 @@ def cmd_build_map_data(config: Config, args: argparse.Namespace) -> None:
         print(f"\n--done-states / --done-dir: {err}\n", file=sys.stderr)
         sys.exit(2)
 
+    if args.private_out and Path(args.private_out).resolve().is_relative_to(
+        Path(args.out).resolve()
+    ):
+        print(
+            f"\n--private-out must not be inside --out ({args.out}): that folder is published.\n",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     cache_path = Path(config.cache.dir) / "geocode.csv"
     try:
         with census_client(config.politeness.user_agent) as client:
@@ -277,16 +286,26 @@ def cmd_build_map_data(config: Config, args: argparse.Namespace) -> None:
                 inputs,
                 lambda addrs: geocode_addresses(addrs, cache_path, client, _print_progress),
                 done_states,
+                people=bool(args.private_out),
             )
     except ValueError as err:
         print(f"\n{err}\n", file=sys.stderr)
         sys.exit(2)
     write_snapshot(snapshot, Path(args.out))
+    if snapshot.people is not None:
+        private_path = write_people(snapshot.people, Path(args.private_out))
 
     print(f"\nWrote summaries of {snapshot.info['total_providers']:,} providers to {args.out}")
     for label, stats in snapshot.info["datasets"].items():
         print(f"  {label}: {stats['providers']:,} providers in {len(stats['states_done'])} states")
-    print(f"  {len(snapshot.locations):,} map points\n")
+    print(f"  {len(snapshot.locations):,} map points")
+    if snapshot.people is not None:
+        print(
+            f"  private provider list: {len(snapshot.people):,} providers -> {private_path}\n"
+            "  It holds names and NPIs. Keep it out of this repository (private store only).\n"
+        )
+    else:
+        print()
 
 
 def cmd_build_hospital_data(config: Config, args: argparse.Namespace) -> None:
@@ -1409,6 +1428,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--out", default="dashboard/data", help="output directory (default: dashboard/data)"
+    )
+    p.add_argument(
+        "--private-out",
+        default=None,
+        metavar="DIR",
+        help="also write the private provider list (names, credentials, NPIs) here, for the "
+        "dashboard's click-to-list-providers feature. It must be outside --out, and the file "
+        "must never be committed to a public repository",
     )
 
     p = sub.add_parser(

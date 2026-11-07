@@ -13,8 +13,11 @@ tagged with a ``dataset`` label so several runs can sit side by side:
   state and specialty.
 * ``build_info.json`` - when it was built and which states each dataset covers.
 
-Names, NPIs, phone numbers and profile links are never read, so they cannot end
-up in a published snapshot. A source is either a ``providers.xlsx`` export or a
+Names, NPIs, phone numbers and profile links are not read for these files, so they
+cannot end up in a published snapshot. Only when ``people=True`` (``--private-out``) are
+names, credentials and NPIs also read, into a separate :data:`PRIVATE_NAME` file that is
+meant for a *private* store and never for this repository (see :func:`write_people`).
+A source is either a ``providers.xlsx`` export or a
 *copy* of a pipeline database (:func:`load_database`; never point it at a
 database a run is still writing to).
 
@@ -46,6 +49,7 @@ LOCATIONS_NAME = "locations.parquet"
 BY_STATE_NAME = "by_state.csv"
 BY_SPECIALTY_NAME = "by_specialty.csv"
 INFO_NAME = "build_info.json"
+PRIVATE_NAME = "providers_private.parquet"
 HOSPITAL_PARQUET_NAME = "hospitals.parquet"
 
 EXPORT_SHEET = "Providers"
@@ -67,12 +71,15 @@ EXPORT_COLUMNS = {
     "ZIP": "zip",
     "Site Confidence": "site_confidence",
 }
+# Extra columns, read only for the private provider list (never for the public summaries).
+PEOPLE_COLUMNS = {"Provider Name": "name", "Credentials": "credentials", "NPI": "npi"}
 # The same columns straight from a pipeline database (``providers`` table, active rows only).
 DATABASE_QUERY = """
     SELECT specialty, provider_type, primary_site_of_care AS primary_site, address, city,
-           state, zip, site_confidence
+           state, zip, site_confidence{people}
     FROM providers WHERE is_active = 1
 """
+DATABASE_PEOPLE = ", full_name AS name, credentials, npi"
 GEO_COLUMNS = ["lat", "lon", "county_fips", "geocode_precision"]
 ROW_COLUMNS = [
     "dataset",
@@ -81,6 +88,24 @@ ROW_COLUMNS = [
     "lat",
     "lon",
     "geocode_precision",
+]
+# What the private provider list holds per provider. lat/lon (rounded like the public map points)
+# plus dataset and state are how the dashboard finds the providers at a clicked point.
+PRIVATE_COLUMNS = [
+    "dataset",
+    "state",
+    "lat",
+    "lon",
+    "name",
+    "credentials",
+    "specialty",
+    "provider_type",
+    "provider_type_source",
+    "npi",
+    "primary_site",
+    "address",
+    "city",
+    "zip",
 ]
 
 # Provider type. The first two values must match the pipeline's ProviderType enum (a test
@@ -144,6 +169,7 @@ class Snapshot(NamedTuple):
     by_state: pd.DataFrame
     by_specialty: pd.DataFrame
     info: dict[str, Any]
+    people: pd.DataFrame | None = None  # private list (:data:`PRIVATE_COLUMNS`); never public
 
 
 def infer_provider_type(specialty: str | None) -> str | None:
@@ -163,9 +189,12 @@ def infer_provider_type(specialty: str | None) -> str | None:
     return TYPE_PHYSICIAN if "physician" in text else TYPE_OTHER
 
 
-def _clean_rows(label: str, df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise one source's rows into :data:`ROW_COLUMNS` (minus coordinates)."""
-    df = df[list(EXPORT_COLUMNS.values())].astype(object)
+def _clean_rows(label: str, df: pd.DataFrame, people: bool = False) -> pd.DataFrame:
+    """Normalise one source's rows into :data:`ROW_COLUMNS` (minus coordinates).
+
+    With ``people`` the name, credentials and NPI columns are kept too."""
+    extra = list(PEOPLE_COLUMNS.values()) if people else []
+    df = df[[*EXPORT_COLUMNS.values(), *extra]].astype(object)
     df = df.where(df.notna(), None)
     df["state"] = df["state"].str.strip().str.upper().fillna(UNKNOWN)  # typos like "Fl", "fL"
     inferred = df["specialty"].map(infer_provider_type)
@@ -179,21 +208,27 @@ def _clean_rows(label: str, df: pd.DataFrame) -> pd.DataFrame:
     df["site_confidence"] = confidence.where(confidence.isin(CONFIDENCE_COLUMNS), NOT_ASSESSED)
     df["specialty"] = df["specialty"].fillna(UNKNOWN)
     df["city"] = df["city"].str.strip().str.title()
+    for column in extra:
+        text = df[column].str.strip()
+        df[column] = text.where(text.notna() & (text != ""), None)
     df.insert(0, "dataset", label)
     return df
 
 
-def load_export(label: str, path: Path) -> pd.DataFrame:
+def load_export(label: str, path: Path, people: bool = False) -> pd.DataFrame:
     """Read one ``providers.xlsx`` into rows (without coordinates).
 
     Raises ``ValueError`` if the workbook is missing an expected column - a
     renamed export header should fail here, not silently blank a chart.
     """
-    df = pd.read_excel(path, sheet_name=EXPORT_SHEET, usecols=list(EXPORT_COLUMNS), dtype=str)
-    return _clean_rows(label, df.rename(columns=EXPORT_COLUMNS))
+    headers = [*EXPORT_COLUMNS, *(PEOPLE_COLUMNS if people else {})]
+    df = pd.read_excel(path, sheet_name=EXPORT_SHEET, usecols=headers, dtype=str)
+    return _clean_rows(label, df.rename(columns={**EXPORT_COLUMNS, **PEOPLE_COLUMNS}), people)
 
 
-def load_database(label: str, path: Path, done_states: Collection[str]) -> pd.DataFrame:
+def load_database(
+    label: str, path: Path, done_states: Collection[str], people: bool = False
+) -> pd.DataFrame:
     """Read the active providers of a pipeline database *copy* into rows (no coordinates).
 
     Only states in ``done_states`` are kept: a state whose run is unfinished holds part of its
@@ -201,10 +236,12 @@ def load_database(label: str, path: Path, done_states: Collection[str]) -> pd.Da
     """
     conn = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True)
     try:
-        df = pd.read_sql_query(DATABASE_QUERY, conn)
+        df = pd.read_sql_query(
+            DATABASE_QUERY.format(people=DATABASE_PEOPLE if people else ""), conn
+        )
     finally:
         conn.close()
-    rows = _clean_rows(label, df)
+    rows = _clean_rows(label, df, people)
     return rows[rows["state"].isin({state.upper() for state in done_states})].reset_index(drop=True)
 
 
@@ -221,7 +258,9 @@ def state_codes(names: Collection[str]) -> list[str]:
     return sorted(set(codes))
 
 
-def load_source(label: str, path: Path, done_states: Collection[str] | None) -> pd.DataFrame:
+def load_source(
+    label: str, path: Path, done_states: Collection[str] | None, people: bool = False
+) -> pd.DataFrame:
     """Rows from ``path``: a database copy (needs ``done_states``) or a ``providers.xlsx``."""
     if path.suffix.lower() in DATABASE_SUFFIXES:
         if not done_states:
@@ -229,8 +268,8 @@ def load_source(label: str, path: Path, done_states: Collection[str] | None) -> 
                 f"{label}: a database needs the list of finished states (done_states), because "
                 "an unfinished state would show a partial count as if it were complete."
             )
-        return load_database(label, path, done_states)
-    return load_export(label, path)
+        return load_database(label, path, done_states, people)
+    return load_export(label, path, people)
 
 
 def _read_hospital_csv(path: Path, columns: dict[str, str]) -> pd.DataFrame:
@@ -365,20 +404,25 @@ def add_coordinates(df: pd.DataFrame, geocoder: Geocoder) -> pd.DataFrame:
 
 
 def build_snapshot(
-    inputs: Mapping[str, Path], geocoder: Geocoder, done_states: Collection[str] | None = None
+    inputs: Mapping[str, Path],
+    geocoder: Geocoder,
+    done_states: Collection[str] | None = None,
+    people: bool = False,
 ) -> Snapshot:
     """Load every ``{label: source}``, geocode them together, return the summaries.
 
     A database source is cut down to ``done_states`` (see :func:`load_database`); a
-    ``providers.xlsx`` is taken whole and covers the states that appear in it.
+    ``providers.xlsx`` is taken whole and covers the states that appear in it. With ``people``
+    the result also carries the private provider list (:func:`private_list`).
     """
-    frames = [load_source(label, path, done_states) for label, path in inputs.items()]
+    frames = [load_source(label, path, done_states, people) for label, path in inputs.items()]
     combined = pd.concat(frames, ignore_index=True)
     if combined.empty:
         raise ValueError(
             "No provider rows to summarize (is every state in the database unfinished?)."
         )
-    rows = add_coordinates(combined, geocoder)[ROW_COLUMNS]
+    located = add_coordinates(combined, geocoder)
+    rows = located[ROW_COLUMNS]
     covered = {
         label: (
             sorted({s.upper() for s in done_states})
@@ -387,7 +431,19 @@ def build_snapshot(
         )
         for (label, path), frame in zip(inputs.items(), frames, strict=True)
     }
-    return summarize(rows, covered)
+    snapshot = summarize(rows, covered)
+    return snapshot._replace(people=private_list(located)) if people else snapshot
+
+
+def private_list(located: pd.DataFrame) -> pd.DataFrame:
+    """The providers that have a map point, as :data:`PRIVATE_COLUMNS`, sorted by name.
+
+    Coordinates are rounded exactly as in :func:`aggregate_locations`, so a clicked map point
+    finds its providers by ``(dataset, state, lat, lon)``."""
+    placed = located[located["geocode_precision"] != PRECISION_NONE].copy()
+    placed["lat"] = placed["lat"].round(COORDINATE_DECIMALS)
+    placed["lon"] = placed["lon"].round(COORDINATE_DECIMALS)
+    return placed[PRIVATE_COLUMNS].sort_values(["name"], ignore_index=True)
 
 
 def summarize(rows: pd.DataFrame, states_done: Mapping[str, list[str]]) -> Snapshot:
@@ -437,3 +493,12 @@ def write_snapshot(snapshot: Snapshot, out_dir: Path) -> None:
     snapshot.by_state.to_csv(out_dir / BY_STATE_NAME, index=False)
     snapshot.by_specialty.to_csv(out_dir / BY_SPECIALTY_NAME, index=False)
     (out_dir / INFO_NAME).write_text(json.dumps(snapshot.info, indent=2) + "\n", encoding="utf-8")
+
+
+def write_people(people: pd.DataFrame, out_dir: Path) -> Path:
+    """Write the private provider list to ``out_dir``. This file holds names and NPIs: it is for
+    a private store, and must never be committed to a public repository."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / PRIVATE_NAME
+    people.to_parquet(path, index=False)
+    return path

@@ -7,33 +7,20 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Changed
-
-- **The Census geocoder is more forgiving.** Requests are now 2,500 addresses instead of
-  10,000, so a slow service no longer times out a whole batch (each saved chunk is kept in the
-  cache), a timeout or server error is retried up to three times, and `build-map-data`
-  prints "geocoded N of M new addresses" after each chunk.
-- **The dashboard now publishes counts only.** `providermap build-map-data` no longer
-  writes provider rows. It writes `locations.parquet` (one row per map point with
-  provider counts by type and confidence, top specialties, and a site name and street
-  address only where five or more providers share the point), `by_state.csv`,
-  `by_specialty.csv` and `build_info.json`. Names, NPIs, phone numbers and profile links
-  are never read. The "Find a provider" tab, the specialty and accepting-new-patients
-  filters and the click-to-list provider table are gone; clicking a dot shows counts.
-  A test fails if the committed snapshot has person-level columns or if git tracks a
-  database or `providers.xlsx` file, and `*.xlsx` is now gitignored.
-- **National overview tab.** US map of providers per state for the chosen dataset, grey
-  where the dataset has no data, with states covered, an "as of" date, and a note that
-  counts are providers listed in each source directory, not all providers in a state.
-  Datasets are now chosen one at a time (the one with the most providers is the default).
-- **`build-map-data` reads a database copy.** `--input "Cigna=copy.db"` summarizes the
-  active providers of a copy of a pipeline database, read-only, limited to finished
-  states given by `--done-states` or `--done-dir`. A database without that list is
-  refused. A map draws at most 25,000 points, and a dataset above that starts on its
-  biggest state.
-
 ### Added
 
+- **Click a dot to see who the providers are (private lookup).** `build-map-data
+  --private-out DIR` also writes `providers_private.parquet` (name, credentials, specialty,
+  NPI, practice site, placed at the same points as the public map). That file never goes in
+  this repository: the dashboard fetches it at run time from a private GitHub repository
+  with a read-only token kept in Streamlit's secrets (`dashboard/private_lookup.py`), and
+  lists only the providers at the clicked dots (up to 300, with a name / specialty / NPI
+  search). Streamlit's table download is turned off in `.streamlit/config.toml`. Without the
+  secret the feature is off. The private file, `private_data/` and `.streamlit/secrets.toml`
+  are gitignored, and a test fails if git tracks a private provider list.
+- **New Insights tab** (`dashboard/insights.py`): facts computed from the data, a specialty
+  explorer with a state map, physician / advanced-practice split by state, providers grouped
+  by how many share a place, the largest named sites, and top cities.
 - **Provider type inferred from specialty where the source has none.** Cigna's
   directory carries no credentials, so the Arizona and Rhode Island rows used to
   show as one gray "Not assessed" colour. `providermap/map_data.py` now infers
@@ -240,6 +227,38 @@ and this project uses [Semantic Versioning](https://semver.org/).
   two-step flow.
 - `PROJECT_STATE.md` - a living summary of what's actually verified working
   against the live AdventHealth site.
+
+### Changed
+
+- **The Map is now the first tab**, and a dataset that never assessed site confidence (Cigna)
+  no longer offers a "Color by site confidence" option, shows the physician share instead of
+  "High-confidence sites", and hides the confidence table in the click panel.
+- **The Census geocoder is more forgiving.** Requests are now 2,500 addresses instead of
+  10,000, so a slow service no longer times out a whole batch (each saved chunk is kept in the
+  cache), a timeout or server error is retried up to three times, and `build-map-data`
+  prints "geocoded N of M new addresses" after each chunk. If the service answers a request
+  with a server error, the request is split in half repeatedly to find the address it rejects;
+  that address is placed by ZIP or city (and tried again next run) while the rest are kept,
+  and a run with more than 20 rejected addresses stops as a service outage. Line breaks inside
+  an address are collapsed so they cannot corrupt the batch file.
+- **The dashboard now publishes counts only.** `providermap build-map-data` no longer
+  writes provider rows. It writes `locations.parquet` (one row per map point with
+  provider counts by type and confidence, top specialties, and a site name and street
+  address only where five or more providers share the point), `by_state.csv`,
+  `by_specialty.csv` and `build_info.json`. Names, NPIs, phone numbers and profile links
+  are never read. The "Find a provider" tab, the specialty and accepting-new-patients
+  filters and the click-to-list provider table are gone; clicking a dot shows counts.
+  A test fails if the committed snapshot has person-level columns or if git tracks a
+  database or `providers.xlsx` file, and `*.xlsx` is now gitignored.
+- **National overview tab.** US map of providers per state for the chosen dataset, grey
+  where the dataset has no data, with states covered, an "as of" date, and a note that
+  counts are providers listed in each source directory, not all providers in a state.
+  Datasets are now chosen one at a time (the one with the most providers is the default).
+- **`build-map-data` reads a database copy.** `--input "Cigna=copy.db"` summarizes the
+  active providers of a copy of a pipeline database, read-only, limited to finished
+  states given by `--done-states` or `--done-dir`. A database without that list is
+  refused. A map draws at most 25,000 points, and a dataset above that starts on its
+  biggest state.
 
 ### Fixed
 

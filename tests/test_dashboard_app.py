@@ -12,11 +12,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -34,6 +36,8 @@ from providermap.map_data import (
 
 REPO = Path(__file__).resolve().parent.parent
 APP = str(REPO / "dashboard" / "app.py")
+sys.path.insert(0, str(REPO / "dashboard"))
+import private_lookup  # noqa: E402
 
 
 def _row(**overrides: object) -> dict[str, object]:
@@ -181,7 +185,11 @@ def _pick(at: AppTest, label: str, *values: str, sidebar: bool = False) -> AppTe
 
 
 def _metrics(at: AppTest) -> dict[str, str]:
-    return {m.label: m.value for m in at.metric}
+    """The Map tab's metrics (the first tab); the overview tab repeats some labels."""
+    found: dict[str, str] = {}
+    for metric in at.metric:
+        found.setdefault(metric.label, metric.value)
+    return found
 
 
 def test_renders_without_errors_and_counts_every_provider(app: AppTest):
@@ -198,7 +206,8 @@ def test_dataset_choice_narrows_everything(app: AppTest):
     assert not app.exception
     metrics = _metrics(app)
     assert metrics["Providers"] == "1"
-    assert metrics["High-confidence sites"] == "n/a"  # nothing assessed in that dataset
+    assert "High-confidence sites" not in metrics  # nothing was assessed in that dataset
+    assert metrics["Physicians"] == "0%"  # so a real figure is shown instead
 
 
 def test_the_default_dataset_is_the_one_with_the_most_providers(app: AppTest):
@@ -209,11 +218,11 @@ def test_a_state_with_no_providers_in_the_dataset_does_not_crash(app_with_hospit
     at = _pick(app_with_hospitals, "State", "AZ", sidebar=True)  # AZ only has hospitals
     assert not at.exception
     assert _metrics(at)["Providers"] == "0"
-    assert _metrics(at)["High-confidence sites"] == "n/a"
+    assert _metrics(at)["Physicians"] == "0%"
 
 
 def test_no_find_a_provider_tab_and_no_row_level_inputs(app: AppTest):
-    assert [t.label for t in app.tabs] == ["National overview", "Map", "Insights", "Data quality"]
+    assert [t.label for t in app.tabs] == ["Map", "National overview", "Insights", "Data quality"]
     assert not app.text_input
     labels = [m.label for m in app.sidebar.multiselect]
     assert labels == ["State"]  # no specialty or accepting-new-patients filters any more
@@ -672,3 +681,182 @@ def test_no_database_or_export_file_is_tracked_by_git():
         pytest.skip("not a git checkout")
     forbidden = (".db", ".sqlite", ".sqlite3", ".xlsx")
     assert not [f for f in tracked if f.lower().endswith(forbidden) or ".db-" in f or ".db." in f]
+
+
+def test_the_map_is_the_first_tab_and_site_confidence_is_offered_only_when_assessed(app: AppTest):
+    assert app.tabs[0].label == "Map"
+    assert any(r.label == "Color by" for r in app.radio)  # AdventHealth has assessed confidence
+    app.sidebar.selectbox[0].select("Rhode Island").run()  # nothing assessed there
+    assert not any(r.label == "Color by" for r in app.radio)
+    legend = next(m.value for m in app.markdown if "&#9679;" in m.value)
+    assert "Other clinician" in legend  # still coloured by provider type
+
+
+def test_insights_tab_renders_its_sections(app: AppTest):
+    assert not app.exception
+    headings = {s.value for s in app.subheader}
+    assert {
+        "What stands out",
+        "Where is a specialty?",
+        "Top specialties",
+        "Physicians and advanced practice providers, state by state",
+        "Big systems or small practices?",
+        "Largest sites",
+        "Top cities",
+    } <= headings
+    facts = [m.value for m in app.markdown if m.value.startswith("- ")]
+    assert any("providers** in" in fact for fact in facts)
+
+
+def test_the_specialty_explorer_follows_the_choice(app: AppTest):
+    box = next(b for b in app.selectbox if b.label == "Specialty")
+    assert "Family Medicine" in box.options
+    box.select("Family Medicine").run()
+    assert not app.exception
+
+
+def test_table_downloads_are_switched_off_in_the_streamlit_config():
+    config = (REPO / ".streamlit" / "config.toml").read_text(encoding="utf-8")
+    assert re.search(r"^\s*disableDataExport\s*=\s*true\s*$", config, re.MULTILINE)
+
+
+class TestClickedPointsListTheirProviders:
+    """The click itself cannot be simulated headlessly, so the panel it opens is run directly."""
+
+    TOKEN = "github_pat_PANEL_SECRET"
+
+    @staticmethod
+    def _script(app_path: str, point_count: int = 1) -> None:
+        import importlib.util
+        import sys
+
+        import pandas as pd
+
+        sys.path.insert(0, str(__import__("pathlib").Path(app_path).parent))
+        spec = importlib.util.spec_from_file_location("dash_under_test", app_path)
+        assert spec and spec.loader
+        dash = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(dash)
+        chosen = pd.DataFrame(
+            {
+                "state": ["NM"] * point_count,
+                "lat": [35.08 + i for i in range(point_count)],
+                "lon": [-106.65] * point_count,
+                "providers": [2] * point_count,
+            }
+        )
+        dash.people_panel("Cigna", chosen)
+
+    @pytest.fixture(autouse=True)
+    def _fresh_cache(self):
+        import streamlit as st
+
+        st.cache_resource.clear()
+        yield
+        st.cache_resource.clear()
+
+    def _private_bytes(self) -> bytes:
+        import io
+
+        import pyarrow.parquet as pq
+
+        rows = [
+            {
+                "dataset": "Cigna",
+                "state": "NM",
+                "lat": 35.08,
+                "lon": -106.65,
+                "name": name,
+                "credentials": None,
+                "specialty": specialty,
+                "provider_type": "Physician",
+                "provider_type_source": "Source",
+                "npi": npi,
+                "primary_site": "Presbyterian Hospital",
+                "address": "1100 Central Ave SE",
+                "city": "Albuquerque",
+                "zip": "87106",
+            }
+            for name, specialty, npi in [
+                ("Zed Last", "Cardiology", "1"),
+                ("Ana Lopez", "Family Medicine", "2"),
+            ]
+        ]
+        buffer = io.BytesIO()
+        pq.write_table(pa.Table.from_pylist(rows), buffer)
+        return buffer.getvalue()
+
+    def _app(self, secrets: dict | None, point_count: int = 1) -> AppTest:
+        at = AppTest.from_function(self._script, args=(APP, point_count), default_timeout=60)
+        if secrets is not None:
+            at.secrets["private_data"] = secrets
+        return at
+
+    def _secrets(self, **overrides: str) -> dict[str, str]:
+        return {
+            "repo": "me/private",
+            "path": "providers_private.parquet",
+            "token": self.TOKEN,
+        } | overrides
+
+    def test_without_a_private_list_the_panel_says_names_are_off(self):
+        at = self._app(None).run()
+        assert not at.exception
+        assert any("not enabled" in c.value for c in at.caption)
+        assert not at.dataframe
+
+    def test_lists_the_providers_at_the_clicked_point(self, monkeypatch):
+        monkeypatch.setattr(private_lookup, "download", lambda source: self._private_bytes())
+        at = self._app(self._secrets()).run()
+        assert not at.exception
+        (table,) = at.dataframe
+        assert table.value["name"].tolist() == ["Ana Lopez", "Zed Last"]
+        assert any("Showing 2 of 2 providers" in c.value for c in at.caption)
+
+    def test_the_search_box_narrows_the_list(self, monkeypatch):
+        monkeypatch.setattr(private_lookup, "download", lambda source: self._private_bytes())
+        at = self._app(self._secrets()).run()
+        at.text_input[0].set_value("cardio").run()
+        assert at.dataframe[0].value["name"].tolist() == ["Zed Last"]
+
+    def test_too_many_clicked_points_asks_for_fewer(self, monkeypatch):
+        monkeypatch.setattr(private_lookup, "download", lambda source: self._private_bytes())
+        at = self._app(self._secrets(), point_count=private_lookup.MAX_POINTS + 1).run()
+        assert any("dots or fewer" in i.value for i in at.info)
+        assert not at.dataframe
+
+    def test_a_count_mismatch_is_flagged(self, monkeypatch):
+        monkeypatch.setattr(private_lookup, "download", lambda source: self._private_bytes())
+        at = self._app(self._secrets()).run()  # the dot says 2 providers: matches the 2 listed
+        assert not any("different build" in c.value for c in at.caption)
+        at = self._app(self._secrets(), point_count=2).run()  # the dots say 4, only 2 are listed
+        assert any("different build" in c.value for c in at.caption)
+
+    def test_a_broken_secret_shows_a_message_without_the_token(self):
+        at = self._app(self._secrets(token="")).run()
+        assert not at.exception
+        (warning,) = at.warning
+        assert "needs repo, path and token" in warning.value
+
+    def test_a_failed_download_shows_a_message_without_the_token(self, monkeypatch):
+        def fail(source):
+            raise private_lookup.PrivateDataError("GitHub answered 404: not found.")
+
+        monkeypatch.setattr(private_lookup, "download", fail)
+        at = self._app(self._secrets()).run()
+        assert not at.exception
+        (warning,) = at.warning
+        assert "404" in warning.value and self.TOKEN not in warning.value
+        assert not at.dataframe
+
+
+def test_no_private_provider_list_is_ever_tracked_by_git():
+    """The private list holds names and NPIs; it belongs in a private store, not this repository."""
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True
+        ).stdout.split("\n")
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("not a git checkout")
+    assert not [f for f in tracked if "private" in Path(f).name.lower() and f.endswith(".parquet")]
+    assert not [f for f in tracked if f.startswith(("private_data/", ".streamlit/secrets"))]

@@ -33,6 +33,8 @@ from providermap.map_data import (
     NOT_ASSESSED,
     NOT_STATED,
     PRECISION_COLUMNS,
+    PRIVATE_COLUMNS,
+    PRIVATE_NAME,
     ROW_COLUMNS,
     TYPE_APP,
     TYPE_COLUMNS,
@@ -50,6 +52,7 @@ from providermap.map_data import (
     state_codes,
     summarize_by_state,
     write_hospital_snapshot,
+    write_people,
     write_snapshot,
 )
 from providermap.models import Confidence, Provider, ProviderType
@@ -449,9 +452,90 @@ class TestWriteSnapshot:
             assert needle not in text
 
 
+class TestPrivateList:
+    """Names and NPIs are read only on request, and only ever land in the private file."""
+
+    def test_names_are_read_only_when_asked_for(self, exports):
+        plain = load_export("x", exports["AdventHealth"])
+        assert not {"name", "credentials", "npi"} & set(plain.columns)
+        with_people = load_export("x", exports["AdventHealth"], people=True)
+        row = with_people.iloc[0]
+        assert (row["name"], row["credentials"], row["npi"]) == (
+            "Justin Menezes, MD",
+            "MD",
+            "1194013169",
+        )
+
+    def test_database_copy_gives_the_same_people_as_the_export(self, db_copy, tmp_path):
+        copy = Database(db_copy)
+        try:
+            export_providers(copy, tmp_path / "all.xlsx")
+        finally:
+            copy.close()
+        from_xlsx = load_export("x", tmp_path / "all.xlsx", people=True)
+        from_xlsx = from_xlsx[from_xlsx["state"] == "FL"].reset_index(drop=True)
+        from_db = load_database("x", db_copy, {"FL"}, people=True)
+        pd.testing.assert_frame_equal(from_db, from_xlsx)
+
+    def test_snapshot_carries_the_private_list_only_on_request(self, exports):
+        assert build_snapshot(exports, fake_geocoder).people is None
+        people = build_snapshot(exports, fake_geocoder, people=True).people
+        assert people is not None
+        assert list(people.columns) == PRIVATE_COLUMNS
+
+    def test_only_placed_providers_are_listed_and_sorted_by_name(self, exports):
+        people = build_snapshot(exports, fake_geocoder, people=True).people
+        assert people is not None
+        assert people["name"].tolist() == sorted(people["name"])
+        assert len(people) == 3  # everyone here is placed at least at city level
+        assert people["lat"].notna().all() and people["lon"].notna().all()
+
+    def test_an_unplaced_provider_is_left_out(self, db, tmp_path):
+        nowhere = dataclasses.replace(_no_zip(), city=None)
+        path = _export(db, tmp_path / "nowhere.xlsx", [nowhere])
+        people = build_snapshot({"x": path}, fake_geocoder, people=True).people
+        assert people is not None and people.empty
+
+    def test_every_private_row_lands_on_a_public_map_point(self, exports):
+        """The dashboard finds a clicked point's providers by dataset, state, lat and lon."""
+        snap = build_snapshot(exports, fake_geocoder, people=True)
+        assert snap.people is not None
+        keys = ["dataset", "state", "lat", "lon"]
+        joined = snap.people.merge(snap.locations[keys + ["providers"]], on=keys, how="left")
+        assert joined["providers"].notna().all()
+        per_point = snap.people.groupby(keys).size().rename("listed").reset_index()
+        counts = per_point.merge(snap.locations[keys + ["providers"]], on=keys)
+        assert (counts["listed"] == counts["providers"]).all()
+
+    def test_the_public_files_stay_free_of_names_even_when_the_private_list_is_built(
+        self, exports, tmp_path
+    ):
+        snap = build_snapshot(exports, fake_geocoder, people=True)
+        out = tmp_path / "public"
+        write_snapshot(snap, out)
+        assert sorted(p.name for p in out.iterdir()) == sorted(
+            [LOCATIONS_NAME, BY_STATE_NAME, BY_SPECIALTY_NAME, INFO_NAME]
+        )
+        text = "".join(
+            (out / name).read_text(encoding="utf-8")
+            for name in (BY_STATE_NAME, BY_SPECIALTY_NAME, INFO_NAME)
+        )
+        locations = pd.read_parquet(out / LOCATIONS_NAME)
+        text += locations.astype(str).to_csv() + " ".join(locations.columns)
+        for needle in PERSONAL:
+            assert needle not in text
+
+    def test_write_people_round_trips(self, exports, tmp_path):
+        snap = build_snapshot(exports, fake_geocoder, people=True)
+        assert snap.people is not None
+        path = write_people(snap.people, tmp_path / "private")
+        assert path.name == PRIVATE_NAME
+        assert pd.read_parquet(path).equals(snap.people)
+
+
 class TestCliInputValidation:
     def _args(self, **overrides: object) -> Namespace:
-        return Namespace(input=["A=x.xlsx"], done_states=[], done_dir=None, out="unused") | overrides  # type: ignore[operator]
+        return Namespace(input=["A=x.xlsx"], done_states=[], done_dir=None, private_out=None, out="unused") | overrides  # type: ignore[operator]
 
     @pytest.mark.parametrize(
         "specs",
@@ -460,18 +544,23 @@ class TestCliInputValidation:
     def test_bad_input_exits_before_any_network_call(self, config: Config, specs: list[str]):
         with pytest.raises(SystemExit) as exc:
             cmd_build_map_data(
-                config, Namespace(input=specs, done_states=[], done_dir=None, out="u")
+                config,
+                Namespace(input=specs, done_states=[], done_dir=None, private_out=None, out="u"),
             )
         assert exc.value.code == 2
 
     def test_bad_state_code_exits(self, config: Config):
-        args = Namespace(input=["A=x.xlsx"], done_states=["AZ,Arizona"], done_dir=None, out="u")
+        args = Namespace(
+            input=["A=x.xlsx"], done_states=["AZ,Arizona"], done_dir=None, private_out=None, out="u"
+        )
         with pytest.raises(SystemExit) as exc:
             cmd_build_map_data(config, args)
         assert exc.value.code == 2
 
     def test_database_without_finished_states_exits(self, config: Config, db_copy: Path):
-        args = Namespace(input=[f"A={db_copy}"], done_states=[], done_dir=None, out="u")
+        args = Namespace(
+            input=[f"A={db_copy}"], done_states=[], done_dir=None, private_out=None, out="u"
+        )
         with pytest.raises(SystemExit) as exc:
             cmd_build_map_data(config, args)
         assert exc.value.code == 2
@@ -480,7 +569,9 @@ class TestCliInputValidation:
         markers = tmp_path / "done"
         markers.mkdir()
         (markers / "state_FL.done").touch()  # not a bare two-letter name
-        args = Namespace(input=[f"A={db_copy}"], done_states=[], done_dir=str(markers), out="u")
+        args = Namespace(
+            input=[f"A={db_copy}"], done_states=[], done_dir=str(markers), private_out=None, out="u"
+        )
         with pytest.raises(SystemExit) as exc:
             cmd_build_map_data(config, args)
         assert exc.value.code == 2
@@ -557,3 +648,17 @@ class TestHospitalSnapshot:
         bad.write_text("Hospital Name,City\nX,Y\n", encoding="utf-8")
         with pytest.raises(ValueError):
             build_hospital_snapshot(bad, bad, fake_geocoder)
+
+
+def test_private_output_inside_the_published_folder_is_refused(config: Config, tmp_path: Path):
+    out = tmp_path / "data"
+    args = Namespace(
+        input=["A=x.xlsx"],
+        done_states=[],
+        done_dir=None,
+        private_out=str(out / "secret"),
+        out=str(out),
+    )
+    with pytest.raises(SystemExit) as exc:
+        cmd_build_map_data(config, args)
+    assert exc.value.code == 2

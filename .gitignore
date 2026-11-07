@@ -31,6 +31,12 @@ database/
 # Generated exports. Provider-level files (providers.xlsx and friends) are the collected data
 # itself, so they stay out of git too; the dashboard publishes counts only.
 *.xlsx
+# The private provider list (names, NPIs) written by `build-map-data --private-out`; it belongs
+# in a private store, never in this repository.
+private_data/
+providers_private*.parquet
+# Local Streamlit secrets (the private-store token).
+.streamlit/secrets.toml
 exports/output/
 # Same as above - a specific staging/pilot run's real ingested output.
 exports/output_staging*/

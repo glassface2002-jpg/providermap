@@ -468,24 +468,55 @@ pass the export to the dashboard builder, e.g.
 
 `dashboard/app.py` is a [Streamlit](https://streamlit.io) app with four tabs:
 
+- **Map** (the first tab) - one or more states as dots (size = providers at that place,
+  colour = the most common provider type, or site confidence when a dataset has it), a density
+  view, and optional trauma-center and NICU rings. Click a dot for its counts and, when a
+  private provider list is set up (below), who the providers are.
 - **National overview** - providers per state on a US map for the chosen dataset.
   States the dataset has no data for (a state's run not finished yet, or one the source
   does not cover) are grey, and the tab shows how many states are covered and the
   snapshot's "as of" date. Counts are providers listed in each source directory
   (for Cigna: its network), not every provider in a state.
-- **Map** - one or more states as dots (size = providers at that place, colour = the most
-  common provider type or site confidence there), a density view, and optional trauma-center
-  and NICU rings. Click a dot for its counts.
-- **Insights** - top specialties, provider type, site confidence and top cities.
+- **Insights** - facts computed from the data ("what stands out"), a specialty explorer
+  (pick a specialty, see it state by state), the physician / advanced-practice split by state,
+  big systems versus small practices (providers grouped by how many share a place), the largest
+  named sites, and top cities.
 - **Data quality** - how precisely each dataset was placed, and what the labels mean.
 
-**Counts only.** The app never holds provider names, NPIs, phone numbers or profile
-links. `build-map-data` reads the provider rows, places them on the map, and writes
-only summaries: how many providers are at each point (split by type and confidence), and
-counts by state and by specialty. A site name and street address are kept only for points
-with five or more providers (a clinic or hospital, not one person's office). A test checks
-that no database or export file is tracked by git and that the published files carry no
-person-level columns.
+**The repository holds counts only.** `build-map-data` reads the provider rows, places them on
+the map, and writes only summaries: how many providers are at each point (split by type and
+confidence), and counts by state and by specialty. A site name and street address are kept only
+for points with five or more providers (a clinic or hospital, not one person's office). A test
+checks that no database, export or private provider list is tracked by git and that the
+published files carry no person-level columns.
+
+### Showing who the providers are (private lookup)
+
+Names and NPIs never go into this repository. To list the providers at a clicked dot, the app
+reads a separate file from a **private** GitHub repository at run time, and shows only the
+rows of the dots a visitor clicks (at most 300 rows, with a name / specialty / NPI search and
+Streamlit's table download turned off in `.streamlit/config.toml`). This stops anyone fetching
+the whole file; it does not stop a determined visitor clicking through every dot and copying
+what they see, so treat what it shows as public.
+
+1. Build the private list next to the public files (the folder must not be inside `--out`):
+   `providermap build-map-data ... --private-out private_data` writes
+   `private_data/providers_private.parquet` (gitignored). Rebuild both together, so the dot
+   counts and the list agree.
+2. Create a **private** repository (for example `providermap-private`) and commit
+   `providers_private.parquet` to it.
+3. Create a fine-grained personal access token limited to that one repository with
+   *Contents: Read-only*.
+4. In Streamlit Community Cloud, open the app's *Settings > Secrets* and add:
+
+   ```toml
+   [private_data]
+   repo = "your-name/providermap-private"
+   path = "providers_private.parquet"
+   token = "github_pat_..."
+   ```
+5. Reboot the app. The file is cached for six hours; reboot to pick up a new one sooner. Without
+   the secret the feature is simply off and the app shows counts only.
 
 ```bash
 pip install -e ".[dashboard]"
@@ -495,6 +526,8 @@ pip install -e ".[dashboard]"
 providermap build-map-data \
     --input "AdventHealth=exports/output/providers.xlsx" \
     --input "Cigna=providermap-copy.db" --done-states "AK,AL,AR"
+
+#    Add --private-out private_data to also write the private list (see above).
 
 # 2. Optional: trauma-center and NICU layers from two CSVs
 providermap build-hospital-data --trauma trauma_centers.csv --nicu nicu_centers.csv

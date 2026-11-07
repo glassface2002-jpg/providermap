@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import re
 import time
 from collections.abc import Callable, Iterable
@@ -35,6 +36,8 @@ import zipcodes
 
 from .parser_utils import normalize_address_key
 
+logger = logging.getLogger(__name__)
+
 CENSUS_BATCH_URL = "https://geocoding.geo.census.gov/geocoder/geographies/addressbatch"
 BENCHMARK = "Public_AR_Current"
 VINTAGE = "Current_Current"
@@ -44,6 +47,9 @@ VINTAGE = "Current_Current"
 CHUNK_SIZE = 2_500
 ATTEMPTS = 3  # tries per request when the service times out or errors
 RETRY_DELAY_SECONDS = 20.0  # waits this long times the attempt number between tries
+# A request the service keeps rejecting is split in half until the address it dislikes is found.
+# More than this many rejected addresses in one run means the service itself is down.
+MAX_REJECTED = 20
 
 PRECISION_ADDRESS = "address"
 PRECISION_ZIP = "zip"
@@ -214,6 +220,12 @@ def _save_cache(path: Path, cache: dict[str, GeoResult]) -> None:
             writer.writerow([key, r.lat or "", r.lon or "", r.county_fips or ""])
 
 
+def _one_line(text: str | None) -> str:
+    """``text`` with every run of whitespace (tabs, line breaks, ...) collapsed to one space; the
+    batch file has one address per line, so a stray line break would corrupt the request."""
+    return " ".join((text or "").split())
+
+
 def _census_batch(client: httpx.Client, rows: list[tuple[str, Address]]) -> dict[str, GeoResult]:
     """One Census request for ``rows`` = ``[(key, address), ...]``."""
     buf = io.StringIO()
@@ -221,7 +233,11 @@ def _census_batch(client: httpx.Client, rows: list[tuple[str, Address]]) -> dict
     ids: dict[str, str] = {}
     for i, (key, addr) in enumerate(rows):
         ids[str(i)] = key
-        writer.writerow([i, strip_unit(addr.street), addr.city, addr.state, addr.zipcode])
+        street, city, state, zipcode = (
+            _one_line(part)
+            for part in (strip_unit(addr.street), addr.city, addr.state, addr.zipcode)
+        )
+        writer.writerow([i, street, city, state, zipcode])
     resp = client.post(
         CENSUS_BATCH_URL,
         data={"benchmark": BENCHMARK, "vintage": VINTAGE},
@@ -232,20 +248,46 @@ def _census_batch(client: httpx.Client, rows: list[tuple[str, Address]]) -> dict
 
 
 def _census_batch_with_retry(
-    client: httpx.Client, rows: list[tuple[str, Address]]
+    client: httpx.Client, rows: list[tuple[str, Address]], attempts: int = ATTEMPTS
 ) -> dict[str, GeoResult]:
-    """:func:`_census_batch`, tried up to :data:`ATTEMPTS` times on a timeout or server error."""
-    for attempt in range(1, ATTEMPTS + 1):
+    """:func:`_census_batch`, tried up to ``attempts`` times on a timeout or server error."""
+    for attempt in range(1, attempts + 1):
         try:
             return _census_batch(client, rows)
         except httpx.HTTPStatusError as err:
-            if err.response.status_code < 500 or attempt == ATTEMPTS:
+            if err.response.status_code < 500 or attempt == attempts:
                 raise
         except httpx.TransportError:  # includes timeouts
-            if attempt == ATTEMPTS:
+            if attempt == attempts:
                 raise
         time.sleep(RETRY_DELAY_SECONDS * attempt)
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _geocode_chunk(
+    client: httpx.Client,
+    rows: list[tuple[str, Address]],
+    rejected: list[tuple[str, Address]],
+    attempts: int = ATTEMPTS,
+) -> dict[str, GeoResult]:
+    """Geocode ``rows``; when the service answers with a server error, split them in half and
+    try each half, down to single addresses, so one address it cannot handle does not lose the
+    rest. Such addresses are appended to ``rejected`` (and re-raised once there are more than
+    :data:`MAX_REJECTED`, which means the service is down). Timeouts and client errors raise."""
+    try:
+        return _census_batch_with_retry(client, rows, attempts)
+    except httpx.HTTPStatusError as err:
+        if err.response.status_code < 500:
+            raise
+        if len(rows) == 1:
+            rejected.extend(rows)
+            if len(rejected) > MAX_REJECTED:
+                raise
+            return {}
+        middle = len(rows) // 2
+        found = _geocode_chunk(client, rows[:middle], rejected, 1)
+        found.update(_geocode_chunk(client, rows[middle:], rejected, 1))
+        return found
 
 
 def geocode_addresses(
@@ -259,8 +301,10 @@ def geocode_addresses(
     Addresses without a usable key (no street or ZIP) are absent from the
     result; callers treat a missing key as unmapped. Raises ``httpx.HTTPError``
     if the Census service fails - answers from earlier chunks are already
-    cached, so rerunning resumes rather than restarts. ``on_progress(done, total)`` is
-    called after each saved chunk of the addresses that were not cached already.
+    cached, so rerunning resumes rather than restarts. An address the service keeps
+    rejecting is placed by ZIP or city and, not being cached, tried again next run.
+    ``on_progress(done, total)`` is called after each saved chunk of the addresses that were
+    not cached already.
     """
     unique: dict[str, Address] = {}
     for addr in addresses:
@@ -270,14 +314,24 @@ def geocode_addresses(
 
     cache = _load_cache(cache_path)
     pending = [(key, addr) for key, addr in unique.items() if key not in cache]
+    rejected: list[tuple[str, Address]] = []
     for start in range(0, len(pending), CHUNK_SIZE):
-        cache.update(_census_batch_with_retry(client, pending[start : start + CHUNK_SIZE]))
+        cache.update(_geocode_chunk(client, pending[start : start + CHUNK_SIZE], rejected))
         _save_cache(cache_path, cache)
         if on_progress:
             on_progress(min(start + CHUNK_SIZE, len(pending)), len(pending))
 
+    if rejected:
+        logger.warning(
+            "The Census service rejected %d address(es); they are placed by ZIP or city instead "
+            "and will be tried again next run.",
+            len(rejected),
+        )
     results: dict[str, GeoResult] = {}
     for key, addr in unique.items():
-        result = cache[key]
-        results[key] = fallback_location(addr) if result.precision == PRECISION_NONE else result
+        result = cache.get(key)
+        if result is not None and result.precision != PRECISION_NONE:
+            results[key] = result
+        else:  # no match, or rejected by the service: place by ZIP or city
+            results[key] = fallback_location(addr)
     return results

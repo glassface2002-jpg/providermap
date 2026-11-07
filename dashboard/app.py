@@ -2,10 +2,12 @@
 
 Reads the summaries written by ``providermap build-map-data`` (map points, counts
 by state and specialty, and ``build_info.json``) and ``providermap
-build-hospital-data`` (optional trauma-centre and NICU layers). It holds counts
-only: no provider names, NPIs or profile links are ever loaded. Deliberately
-imports nothing from the pipeline, so it deploys with just streamlit, plotly,
-pydeck, pandas and pyarrow.
+build-hospital-data`` (optional trauma-centre and NICU layers). The repository holds
+counts only. Clicking a dot can also list who the providers are, but only when a
+private provider list is configured (see ``private_lookup.py``); it is fetched from a
+private store at run time and never lives in this repository. Deliberately imports
+nothing from the pipeline, so it deploys with just streamlit, plotly, pydeck, pandas
+and pyarrow.
 
 Run locally:  streamlit run dashboard/app.py
 """
@@ -19,9 +21,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+import insights
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import private_lookup
 import pydeck as pdk
 import streamlit as st
 
@@ -58,6 +62,7 @@ PRECISION_COLUMNS = {
     "none": "n_none",
 }
 LOCATION_COLUMNS = [
+    "state",
     "lat",
     "lon",
     "precision",
@@ -182,6 +187,29 @@ def load_hospitals() -> pd.DataFrame | None:
     return _read_hospitals(str(path), path.stat().st_mtime_ns) if path.exists() else None
 
 
+@st.cache_resource(ttl=6 * 3600, show_spinner="Loading the provider lookup...")
+def _private_table(repo: str, path: str, token: str, ref: str) -> Any:
+    source = private_lookup.Source(repo, path, token, ref)
+    return private_lookup.load_table(private_lookup.download(source))
+
+
+def private_table() -> tuple[Any, str | None]:
+    """The private provider list as ``(table, problem)``.
+
+    ``table`` is ``None`` when this deployment has no private list (the feature is simply off)
+    or when it is configured but could not be loaded, in which case ``problem`` is a message
+    that is safe to show (it never contains the token)."""
+    try:
+        source = private_lookup.source_from_secrets(st.secrets)
+        if source is None:
+            return None, None
+        return _private_table(source.repo, source.path, source.token, source.ref), None
+    except st.errors.StreamlitSecretNotFoundError:
+        return None, None
+    except private_lookup.PrivateDataError as err:
+        return None, str(err)
+
+
 def dataset_order(info: dict[str, Any]) -> list[str]:
     """Dataset names, the one with the most providers first (that one is the default)."""
     datasets = info["datasets"]
@@ -231,11 +259,20 @@ def kpis(by_state: pd.DataFrame, by_specialty: pd.DataFrame) -> None:
     cols = st.columns(4)
     cols[0].metric("Providers", f"{by_state['providers'].sum():,}")
     cols[1].metric("Mapped locations", f"{by_state['map_points'].sum():,}")
-    cols[2].metric(
-        "High-confidence sites",
-        "n/a" if share is None else f"{share:.0%}",
-        help="Share of providers whose site confidence was assessed and is 'high'.",
-    )
+    if share is None:  # this dataset never assessed site confidence, so show something real
+        physicians = by_state["n_physician"].sum() / max(by_state["providers"].sum(), 1)
+        cols[2].metric(
+            "Physicians",
+            f"{physicians:.0%}",
+            help="Share of providers whose type is Physician (a type inferred from the "
+            "specialty where the source recorded none).",
+        )
+    else:
+        cols[2].metric(
+            "High-confidence sites",
+            f"{share:.0%}",
+            help="Share of providers whose site confidence was assessed and is 'high'.",
+        )
     cols[3].metric("Specialties", f"{by_specialty['specialty'].nunique():,}")
 
 
@@ -411,18 +448,46 @@ def provider_layer(points: pd.DataFrame) -> pdk.Layer:
     )
 
 
-def selection_summary(points: pd.DataFrame, selected: list[int]) -> None:
-    """Counts for the clicked dots: totals by type and confidence, then one line per dot."""
+def people_panel(dataset: str, chosen: pd.DataFrame) -> None:
+    """Who the providers at the clicked dots are, from the private list (when there is one)."""
+    table, problem = private_table()
+    if problem:
+        st.warning(f"The provider list could not be loaded: {problem}")
+        return
+    if table is None:
+        st.caption("Provider names are not enabled in this deployment.")
+        return
+    if len(chosen) > private_lookup.MAX_POINTS:
+        st.info(f"Click {private_lookup.MAX_POINTS} dots or fewer to list their providers.")
+        return
+    st.markdown("#### Providers here")
+    text = st.text_input(
+        "Search these providers", placeholder="name, specialty or NPI", key="people_search"
+    )
+    found, total = private_lookup.providers_at(
+        table, dataset, chosen[["state", "lat", "lon"]], text
+    )
+    counted = int(chosen["providers"].sum())
+    note = f"Showing {len(found):,} of {total:,} providers"
+    if len(found) < total:
+        note += f" (the first {private_lookup.MAX_ROWS:,} by name; search to narrow)"
+    if not text.strip() and total != counted:
+        note += f". The dot counts {counted:,}; the provider list may be from a different build."
+    st.caption(note)
+    st.dataframe(private_lookup.display_frame(found), hide_index=True, width="stretch")
+
+
+def selection_summary(dataset: str, points: pd.DataFrame, selected: list[int]) -> None:
+    """Counts for the clicked dots, then (if enabled) who the providers are."""
     chosen = points[points["location_id"].isin(selected)]
     st.subheader(
-        f"{chosen['providers'].sum():,} providers at {len(chosen)} selected location"
-        f"{'s' if len(chosen) != 1 else ''}"
+        f"{chosen['providers'].sum():,} provider{'s' if chosen['providers'].sum() != 1 else ''} "
+        f"at {len(chosen)} selected location{'s' if len(chosen) != 1 else ''}"
     )
-    left, right = st.columns(2)
-    for column, label, columns in (
-        (left, "Provider type", TYPE_COLUMNS),
-        (right, "Site confidence", CONFIDENCE_COLUMNS),
-    ):
+    shown = [("Provider type", TYPE_COLUMNS)]
+    if chosen["n_confidence_unknown"].sum() < chosen["providers"].sum():
+        shown.append(("Site confidence", CONFIDENCE_COLUMNS))
+    for column, (label, columns) in zip(st.columns(len(shown)), shown, strict=True):
         counts = {name: int(chosen[col].sum()) for name, col in columns.items()}
         column.dataframe(
             pd.DataFrame({label: list(counts), "providers": list(counts.values())}),
@@ -436,6 +501,7 @@ def selection_summary(points: pd.DataFrame, selected: list[int]) -> None:
         hide_index=True,
         width="stretch",
     )
+    people_panel(dataset, chosen)
 
 
 def map_tab(
@@ -447,7 +513,8 @@ def map_tab(
     columns = st.columns(3)
     view = columns[0].radio("View", ["Locations", "Density"], horizontal=True)
     color_by = "Provider type"
-    if view == "Locations":
+    assessed = high_confidence_share(select_rows(by_state, dataset, states)) is not None
+    if view == "Locations" and assessed:  # nothing to colour by if no confidence was assessed
         color_by = columns[1].radio(
             "Color by", ["Provider type", "Site confidence"], horizontal=True
         )
@@ -554,10 +621,10 @@ def map_tab(
     if not selected:
         st.caption(
             "Dot size = number of providers at that location, and dots grow as you zoom in. "
-            "Dot colour = the most common value at that location. Click a dot for its counts."
+            "Dot colour = the most common value at that location. Click a dot to see who is there."
         )
         return
-    selection_summary(points, selected)
+    selection_summary(dataset, points, selected)
 
 
 def hospital_quality(hospitals: pd.DataFrame) -> None:
@@ -670,50 +737,87 @@ def insights_tab(
     if counts.empty:
         st.info("No providers match the current filters.")
         return
-    specialties = (
-        select_rows(by_specialty, dataset, states)
-        .groupby("specialty")["providers"]
-        .sum()
-        .nlargest(15)
-        .reset_index()
+    spec = select_rows(by_specialty, dataset, states)
+    locations = load_locations(
+        dataset, states, ["state", "city", "site", "providers", "n_physician", "n_app"]
     )
-    fig = px.bar(
-        specialties, x="providers", y="specialty", orientation="h", title="Top specialties"
+    bands = insights.site_size_bands(locations["providers"])
+    sites = insights.largest_sites(locations)
+
+    st.subheader("What stands out")
+    st.markdown("\n".join(f"- {fact}" for fact in insights.headlines(counts, spec, bands, sites)))
+    st.caption(
+        "Counts are the providers listed in each source directory, not every provider in a "
+        "state. Provider types the source did not record are inferred from the specialty."
     )
-    fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=460)
-    st.plotly_chart(fig, width="stretch")
+
+    top = spec.groupby("specialty")["providers"].sum().nlargest(15).reset_index()
+    left, right = st.columns([3, 2])
+    with left:
+        st.subheader("Where is a specialty?")
+        names = (
+            by_specialty[by_specialty["dataset"] == dataset]
+            .groupby("specialty")["providers"]
+            .sum()
+            .drop("Unknown", errors="ignore")
+            .nlargest(40)
+            .index.tolist()
+        )
+        choice = st.selectbox("Specialty", names, help="The 40 most common in this dataset.")
+        where = insights.specialty_by_state(select_rows(by_specialty, dataset, []), choice)
+        st.plotly_chart(
+            insights.state_map(where, f"{choice} providers"), width="stretch", key="specialty_map"
+        )
+    with right:
+        st.subheader("Top specialties")
+        st.plotly_chart(
+            insights.ranked_bars(top, "specialty", "providers", height=470),
+            width="stretch",
+            key="specialty_bars",
+        )
+
+    st.subheader("Physicians and advanced practice providers, state by state")
+    mix = insights.provider_mix(select_rows(by_state, dataset, []))
+    if mix.empty:
+        st.info(f"No state has {insights.MIN_STATE_PROVIDERS:,} providers yet.")
+    else:
+        st.plotly_chart(insights.mix_bars(mix, COLORS), width="stretch", key="state_mix")
+        st.caption(
+            f"The {len(mix)} largest states with at least {insights.MIN_STATE_PROVIDERS:,} "
+            "providers, sorted by advanced-practice share. A larger share may reflect how a "
+            "network lists its providers as much as how care is delivered."
+        )
 
     left, right = st.columns(2)
-    for column, title, columns in (
-        (left, "Provider type", TYPE_COLUMNS),
-        (right, "Site confidence", CONFIDENCE_COLUMNS),
-    ):
-        split = pd.DataFrame(
-            {"label": list(columns), "providers": [int(counts[c].sum()) for c in columns.values()]}
-        )
-        fig = px.bar(
-            split,
-            x="label",
-            y="providers",
-            color="label",
-            color_discrete_map=COLORS,
-            title=title,
-        )
-        fig.update_layout(showlegend=False, xaxis_title=None)
-        column.plotly_chart(fig, width="stretch")
+    with left:
+        st.subheader("Big systems or small practices?")
+        st.plotly_chart(insights.band_bars(bands), width="stretch", key="site_sizes")
+        st.caption("Providers grouped by how many providers are listed at the same place.")
+    with right:
+        st.subheader("Largest sites")
+        if sites.empty:
+            st.info("No place has enough providers to be named.")
+        else:
+            st.plotly_chart(
+                insights.ranked_bars(
+                    sites.assign(label=sites["site"] + " (" + sites["place"] + ")"),
+                    "label",
+                    "providers",
+                    height=360,
+                ),
+                width="stretch",
+                key="largest_sites",
+            )
 
-    cities = load_locations(dataset, states, ["state", "city", "providers"]).dropna(subset=["city"])
-    cities["place"] = cities["city"] + ", " + cities["state"]
+    cities = locations.dropna(subset=["city"])
+    cities = cities.assign(place=cities["city"] + ", " + cities["state"])
     top_places = cities.groupby("place")["providers"].sum().nlargest(15).reset_index()
-    fig = px.bar(
-        top_places,
-        x="providers",
-        y="place",
-        orientation="h",
-        title="Top cities by provider count (mapped providers)",
+    st.subheader("Top cities")
+    st.plotly_chart(
+        insights.ranked_bars(top_places, "place", "providers", height=460),
+        width="stretch",
+        key="top_cities",
     )
-    fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=460)
-    st.plotly_chart(fig, width="stretch")
 
 
 def quality_tab(
@@ -805,14 +909,14 @@ def main() -> None:
     by_state, by_specialty, info = load_snapshot()
     hospitals = load_hospitals()
     dataset, states = sidebar_filters(info, by_state, hospitals)
-    overview_t, map_t, insights_t, quality_t = st.tabs(
-        ["National overview", "Map", "Insights", "Data quality"]
+    map_t, overview_t, insights_t, quality_t = st.tabs(
+        ["Map", "National overview", "Insights", "Data quality"]
     )
-    with overview_t:
-        overview_tab(dataset, by_state, info)
     with map_t:
         kpis(select_rows(by_state, dataset, states), select_rows(by_specialty, dataset, states))
         map_tab(dataset, states, by_state, hospitals)
+    with overview_t:
+        overview_tab(dataset, by_state, info)
     with insights_t:
         insights_tab(dataset, states, by_state, by_specialty)
     with quality_t:

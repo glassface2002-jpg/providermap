@@ -202,7 +202,7 @@ class TestGeocodeAddresses:
         def flaky(request: httpx.Request) -> httpx.Response:
             if len(requests) == 1:  # second chunk fails
                 requests.append(request)
-                return httpx.Response(500)
+                return httpx.Response(400)
             return good(request)
 
         with _client(flaky) as client, pytest.raises(httpx.HTTPStatusError):
@@ -251,9 +251,10 @@ class TestRetries:
 
             return handler
 
-        with _client(status(503)) as client, pytest.raises(httpx.HTTPStatusError):
-            geocode_addresses(self._addr(), tmp_path / "a.csv", client)
-        assert len(calls) == geocode.ATTEMPTS
+        with _client(status(503)) as client:
+            out = geocode_addresses(self._addr(), tmp_path / "a.csv", client)
+        assert len(calls) == geocode.ATTEMPTS  # tried again and again, then set aside
+        assert next(iter(out.values())).precision == "zip"  # placed by ZIP instead
 
         calls.clear()
         with _client(status(400)) as client, pytest.raises(httpx.HTTPStatusError):
@@ -281,3 +282,62 @@ def test_progress_is_reported_after_each_saved_chunk(tmp_path: Path, monkeypatch
             addrs, tmp_path / "c.csv", client, lambda done, total: seen.append((done, total))
         )
     assert seen == [(2, 5), (4, 5), (5, 5)]
+
+
+class TestRejectedAddresses:
+    @pytest.fixture(autouse=True)
+    def _no_waiting(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(geocode, "RETRY_DELAY_SECONDS", 0)
+
+    def _addrs(self, count: int) -> list[Address]:
+        return [Address(f"{n} Main St", "Providence", "RI", "02904") for n in range(1, count + 1)]
+
+    def test_one_bad_address_is_set_aside_and_the_rest_are_kept(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        requests: list[httpx.Request] = []
+        good = _batch_handler(requests)
+
+        def picky(request: httpx.Request) -> httpx.Response:
+            if "7 Main St" in request.read().decode("utf-8"):
+                requests.append(request)
+                return httpx.Response(502)
+            return good(request)
+
+        addrs = self._addrs(10)
+        cache = tmp_path / "geocode.csv"
+        with _client(picky) as client, caplog.at_level("WARNING"):
+            out = geocode_addresses(addrs, cache, client)
+
+        bad = out[address_key(addrs[6])]  # type: ignore[index]
+        assert bad.precision == "zip"  # placed approximately, not lost
+        assert sum(r.precision == "address" for r in out.values()) == 9
+        assert "rejected 1 address" in caplog.text
+
+        # Not cached, so the next run tries it again (and nothing else).
+        retried: list[httpx.Request] = []
+        with _client(_batch_handler(retried)) as client:
+            again = geocode_addresses(addrs, cache, client)
+        assert len(retried) == 1
+        assert again[address_key(addrs[6])].precision == "address"  # type: ignore[index]
+
+    def test_a_dead_service_fails_fast_instead_of_testing_every_address(self, tmp_path: Path):
+        calls: list[int] = []
+
+        def down(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(502)
+
+        with _client(down) as client, pytest.raises(httpx.HTTPStatusError):
+            geocode_addresses(self._addrs(500), tmp_path / "c.csv", client)
+        assert len(calls) < 200  # gave up after MAX_REJECTED addresses, not after all 500
+
+
+def test_line_breaks_in_an_address_cannot_corrupt_the_batch_file(tmp_path: Path):
+    requests: list[httpx.Request] = []
+    messy = Address("12 Main\nSt\t", "Provi\r\ndence", "RI", "02904")
+    with _client(_batch_handler(requests)) as client:
+        out = geocode_addresses([messy], tmp_path / "c.csv", client)
+    body = requests[0].read().decode("utf-8")
+    assert "12 Main St,Provi dence,RI,02904" in body
+    assert next(iter(out.values())).precision == "address"
